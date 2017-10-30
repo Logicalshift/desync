@@ -8,8 +8,19 @@ use std::thread::*;
 use std::sync::mpsc::*;
 use std::collections::vec_deque::*;
 
+use num_cpus;
+
+const MIN_THREADS: usize = 8;
+
 lazy_static! {
     static ref SCHEDULER: Arc<Scheduler> = Arc::new(Scheduler::new());
+}
+
+///
+/// The default maximum number of threads in a scheduler 
+///
+fn initial_max_threads() -> usize {
+    MIN_THREADS.min(num_cpus::get()*2)
 }
 
 ///
@@ -58,7 +69,10 @@ pub struct Scheduler {
     queues: Arc<Mutex<Vec<Weak<JobQueue>>>>,
 
     /// Active threads
-    threads: Mutex<Vec<SchedulerThread>>
+    threads: Mutex<Vec<SchedulerThread>>,
+
+    /// The maximum number of threads permitted in this scheduler
+    max_threads: Mutex<usize>
 }
 
 ///
@@ -181,8 +195,9 @@ impl Scheduler {
     /// 
     fn new() -> Scheduler {
         let result = Scheduler { 
-            queues:     Arc::new(Mutex::new(vec![])),
-            threads:    Mutex::new(vec![])
+            queues:         Arc::new(Mutex::new(vec![])),
+            threads:        Mutex::new(vec![]),
+            max_threads:    Mutex::new(initial_max_threads())
         };
 
         result.spawn_thread();

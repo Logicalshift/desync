@@ -5,4 +5,5 @@ authors = ["Andrew Hunter <andrew@logicalshift.io>"]
 license = "Apache-2.0"
 
 [dependencies]
-lazy_static = "0.2"
+lazy_static     = "0.2"
+num_cpus        = "1.0"
