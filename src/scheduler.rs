@@ -180,10 +180,13 @@ impl Scheduler {
     /// (There's only actually one scheduler)
     /// 
     fn new() -> Scheduler {
-        Scheduler { 
+        let result = Scheduler { 
             queues:     Arc::new(Mutex::new(vec![])),
             threads:    Mutex::new(vec![])
-        }
+        };
+        result.spawn_thread();
+
+        result
     }
 
     ///
@@ -250,17 +253,13 @@ impl Scheduler {
         let queues = self.queues.clone();
 
         self.schedule_dormant(move || {
+            // Run queues until there are no more to run, then become dormant again
             while let Some(work) = Self::next_to_run(&queues) {
                 work.drain();
             }
-        })
-    }
 
-    ///
-    /// Retrieves the global scheduler
-    ///
-    pub fn get<'a>() -> &'a Scheduler {
-        &SCHEDULER
+            // TODO: if there are no dormant threads, there's a race here at the moment as this thread won't get rescheduled while it's 'dying'
+        })
     }
 
     ///
@@ -290,5 +289,80 @@ impl Scheduler {
             // A true result indicates that the job was scheduled but the queue is not running. Try to schedule a thread if this occurs.
             self.schedule_thread();
         }
+    }
+}
+
+///
+/// Retrieves the global scheduler
+///
+pub fn scheduler<'a>() -> &'a Scheduler {
+    &SCHEDULER
+}
+
+///
+/// Creates a scheduler queue
+///
+pub fn queue() -> Arc<JobQueue> {
+    scheduler().create_job_queue()
+}
+
+///
+/// Creates a scheduler queue
+///
+pub fn async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
+    scheduler().async(queue, job)
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::time::*;
+
+    #[test]
+    fn can_schedule_async() {
+        let (tx, rx)    = channel();
+        let queue       = queue();
+
+        async(&queue, move || {
+            tx.send(42).unwrap();
+        });
+
+        assert!(rx.recv().unwrap() == 42);
+    }
+
+    #[test]
+    fn will_schedule_in_order() {
+        let (tx, rx)    = channel();
+        let queue       = queue();
+
+        let (tx1, tx2)  = (tx.clone(), tx.clone());
+
+        async(&queue, move || {
+            sleep(Duration::from_millis(100));
+            tx1.send(1).unwrap();
+        });
+        async(&queue, move || {
+            tx2.send(2).unwrap();
+        });
+
+        assert!(rx.recv().unwrap() == 1);
+        assert!(rx.recv().unwrap() == 2);
+    }
+
+    #[test]
+    fn will_schedule_separate_queues_in_parallel() {
+        let queue1          = queue();
+        let queue2          = queue();
+        let queue2_has_run  = Arc::new(Mutex::new(false));
+
+        let queue1_check = queue2_has_run.clone();
+
+        async(&queue1, move || {
+            sleep(Duration::from_millis(100));
+            assert!(*queue1_check.lock().unwrap() == true);
+        });
+        async(&queue2, move || {
+            *queue2_has_run.lock().unwrap() = true;
+        });
     }
 }
