@@ -1,5 +1,46 @@
 //!
 //! # Scheduler
+//! 
+//! The scheduler provides a new synchronisation mechanism: the `JobQueue`. You can get one
+//! by calling `scheduler::queue()`:
+//! 
+//! ```
+//! use desync::scheduler;
+//! 
+//! let queue = scheduler::queue();
+//! ```
+//! 
+//! A `JobQueue` allows jobs to be scheduled in the background. Jobs are scheduled in the order
+//! that they arrive, so anything on a queue is run synchronously with respect to the queue
+//! itself. The `async` call can be used to schedule stuff:
+//! 
+//! ```
+//! # use desync::scheduler;
+//! # 
+//! # let queue = scheduler::queue();
+//! # 
+//! scheduler::async(&queue, || println!("First job"));
+//! scheduler::async(&queue, || println!("Second job"));
+//! scheduler::async(&queue, || println!("Third job"));
+//! ```
+//! 
+//! These will be scheduled onto background threads created by the scheduler. There is also a
+//! `sync` method. Unlike `async`, this can return a value from the job function it takes
+//! as a parameter and doesn't return until its job has completed:
+//! 
+//! ```
+//! # use desync::scheduler;
+//! # 
+//! # let queue = scheduler::queue();
+//! #
+//! scheduler::async(&queue, || println!("In the background"));
+//! let someval = scheduler::sync(&queue, || { println!("In the foreground"); 42 });
+//! # assert!(someval == 42);
+//! ```
+//! 
+//! As queues are synchronous with themselves, it's possible to access data without needing
+//! extra synchronisation primitives: `async` is perfect for updating data in the background
+//! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
 use std::mem;
