@@ -351,6 +351,7 @@ mod test {
 
     #[test]
     fn will_schedule_separate_queues_in_parallel() {
+        let (tx, rx)        = channel();
         let queue1          = queue();
         let queue2          = queue();
         let queue2_has_run  = Arc::new(Mutex::new(false));
@@ -360,9 +361,12 @@ mod test {
         async(&queue1, move || {
             sleep(Duration::from_millis(100));
             assert!(*queue1_check.lock().unwrap() == true);
+            tx.send(()).unwrap();
         });
         async(&queue2, move || {
             *queue2_has_run.lock().unwrap() = true;
         });
+
+        rx.recv().unwrap();
     }
 }
