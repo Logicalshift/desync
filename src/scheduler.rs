@@ -184,6 +184,10 @@ impl Scheduler {
             queues:     Arc::new(Mutex::new(vec![])),
             threads:    Mutex::new(vec![])
         };
+
+        result.spawn_thread();
+        result.spawn_thread();
+        result.spawn_thread();
         result.spawn_thread();
 
         result
@@ -359,6 +363,7 @@ mod test {
         let queue1_check = queue2_has_run.clone();
 
         async(&queue1, move || {
+            // The other task needs to start within 100ms for this to work
             sleep(Duration::from_millis(100));
             tx.send(*queue1_check.lock().unwrap()).unwrap();
         });
