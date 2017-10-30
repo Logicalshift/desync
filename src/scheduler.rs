@@ -387,13 +387,22 @@ impl Scheduler {
     }
 
     ///
-    /// Schedules a job on this scheduler
+    /// Schedules a job on this scheduler, which will run after any jobs that are already 
+    /// in the specified queue and as soon as a thread is available to run it.
     ///
     pub fn async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
         if queue.queue(Job::new(job)) {
             // A true result indicates that the job was scheduled but the queue is not running. Try to schedule a thread if this occurs.
             self.schedule_thread();
         }
+    }
+
+    ///
+    /// Schedules a job on this scheduler, which will run after any jobs that are already
+    /// in the specified queue. This function will not return until the job has completed.
+    ///
+    pub fn sync<Result: Send, TFn: 'static+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+        unimplemented!()
     }
 }
 
@@ -412,10 +421,17 @@ pub fn queue() -> Arc<JobQueue> {
 }
 
 ///
-/// Creates a scheduler queue
+/// Performs an action asynchronously on the specified queue
 ///
 pub fn async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
     scheduler().async(queue, job)
+}
+
+///
+/// Performs an action synchronously on the specified queue 
+///
+pub fn sync<Result: Send, TFn: 'static+Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
+    scheduler().sync(queue, job)
 }
 
 #[cfg(test)]
@@ -541,5 +557,26 @@ mod test {
 
             scheduler.despawn_threads_if_overloaded();
         }, 500);
+    }
+
+    #[test]
+    fn can_schedule_sync() {
+        timeout(|| {
+            let val         = Arc::new(Mutex::new(0));
+            let queue       = queue();
+
+            let async_val = val.clone();
+            async(&queue, move || {
+                sleep(Duration::from_millis(100));
+                *async_val.lock().unwrap() = 42;
+            });
+
+            let new_val = sync(&queue, move || { 
+                let v = val.lock().unwrap();
+                *v
+            });
+
+            assert!(new_val == 42);
+        }, 100);
     }
 }
