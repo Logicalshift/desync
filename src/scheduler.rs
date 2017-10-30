@@ -401,8 +401,59 @@ impl Scheduler {
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
-    pub fn sync<Result: Send, TFn: 'static+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
-        unimplemented!()
+    pub fn sync<Result: 'static+Send, TFn: 'static+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+        // When the task runs on the queue, we'll put it here
+        let result = Arc::new(Mutex::new(None));
+
+        // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+        let run_on_this_thread = {
+            let mut is_running = queue.running.lock().unwrap();
+
+            if !*is_running {
+                // The queue is idle: we're going to run it until this task is done
+                *is_running = true;
+                true
+            } else {
+                // Queue is running elsewhere, so we need to park this thread instead
+                false
+            }
+        };
+
+        if run_on_this_thread {
+            // Queue a job that'll run the requested job and then set the result
+            let queue_result = result.clone();
+            queue.queue(Job::new(move || {
+                let job_result = job();
+                *queue_result.lock().unwrap() = Some(job_result);
+            }));
+
+            // While there is no result, run a job from the queue
+            while result.lock().unwrap().is_none() {
+                if let Some(mut job) = queue.dequeue() {
+                    job.run();
+                } else {
+                    panic!("Queue drained before synchronous job could execute");
+                }
+            }
+
+            // Stop running the queue as soon as we have the result
+            *queue.running.lock().unwrap() = false;
+
+            // Schedule a thread so the queue can start running again if there are any extra jobs remaining
+            self.schedule_thread();
+
+            // Get the final result by swapping it out of the mutex
+            let mut final_result    = None;
+            let mut old_result      = result.lock().unwrap();
+
+            mem::swap(&mut *old_result, &mut final_result);
+
+            final_result.unwrap()
+        } else {
+            // Queue a job that unparks this thread when done
+            // TODO: need to do this while we *know* the queue is running!
+            unimplemented!()
+        }
     }
 }
 
@@ -430,7 +481,7 @@ pub fn async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) 
 ///
 /// Performs an action synchronously on the specified queue 
 ///
-pub fn sync<Result: Send, TFn: 'static+Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
+pub fn sync<Result: 'static+Send, TFn: 'static+Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
     scheduler().sync(queue, job)
 }
 
