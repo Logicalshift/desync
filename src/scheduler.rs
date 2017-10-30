@@ -204,6 +204,39 @@ impl Scheduler {
     }
 
     ///
+    /// Changes the maximum number of threads this scheduler can spawn (existing threads
+    /// are not despawned by this method)
+    ///
+    pub fn set_max_threads(&self, max_threads: usize) {
+        // Update the maximum number of threads we can spawn
+        { *self.max_threads.lock().unwrap() = max_threads };
+    }
+
+    ///
+    /// Despawns threads if we're running more than the maximum number
+    /// 
+    /// Must not be called from a scheduler thread (as it waits for the threads to despawn)
+    ///
+    pub fn despawn_threads_if_overloaded(&self) {
+        let max_threads = { *self.max_threads.lock().unwrap() };
+        let to_despawn  = {
+            // Transfer the threads from the threads vector to our _to_despawn variable
+            // This is then dropped outside the mutex (so we don't block if one of the threads doesn't stop)
+            let mut to_despawn  = vec![];
+            let mut threads     = self.threads.lock().unwrap();
+
+            while threads.len() > max_threads {
+                to_despawn.push(threads.pop().unwrap().thread);
+            }
+
+            to_despawn
+        };
+
+        // Wait for the threads to despawn
+        to_despawn.into_iter().for_each(|join_handle| { join_handle.join().ok(); });
+    }
+
+    ///
     /// Finds the next queue that should be run. If this returns successfully, the queue will 
     /// be marked as running.
     /// 
@@ -491,6 +524,22 @@ mod test {
             });
 
             assert!(rx.recv().unwrap() == true);
+        }, 500);
+    }
+
+    #[test]
+    fn will_despawn_extra_threads() {
+        // As we join with the threads, we'll timeout if any of the spawned threads fail to end
+        timeout(|| {
+            let scheduler = scheduler();
+
+            // Maximum of 10 threads, but we'll spawn 20
+            scheduler.set_max_threads(10);
+            for _ in 1..20 {
+                scheduler.spawn_thread();
+            }
+
+            scheduler.despawn_threads_if_overloaded();
         }, 500);
     }
 }
