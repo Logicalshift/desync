@@ -200,11 +200,6 @@ impl Scheduler {
             max_threads:    Mutex::new(initial_max_threads())
         };
 
-        result.spawn_thread();
-        result.spawn_thread();
-        result.spawn_thread();
-        result.spawn_thread();
-
         result
     }
 
@@ -240,18 +235,22 @@ impl Scheduler {
     where RunJob: 'static+Send+Fn(JobData) -> (), NextJob: 'static+Send+Fn() -> Option<JobData> {
         let threads = self.threads.lock().unwrap();
 
+        // Find the first thread that is not marked as busy and schedule this task on it
         for thread in threads.iter() {
             let mut busy = thread.busy.lock().unwrap();
 
             if !*busy {
+                // Clone the busy mutex so we can return this thread to readiness
                 let also_busy = thread.busy.clone();
 
+                // This thread is busy
                 *busy = true;
                 thread.run(Job::new(move || {
                     let mut done = false;
 
                     while !done {
-                        // Obtain the next job
+                        // Obtain the next job. The thread is not busy once there are no longer any jobs
+                        // We hold the mutex while this is going on to avoid a race condition when a thread is going dormant
                         let job_data = {
                             let mut busy = also_busy.lock().unwrap();
                             let job_data = next_job();
@@ -282,6 +281,25 @@ impl Scheduler {
     }
 
     ///
+    /// If we're running fewer than the maximum number of threads, try to spawn a new one
+    ///
+    fn spawn_thread_if_less_than_maximum(&self) -> bool {
+        let max_threads = { *self.max_threads.lock().unwrap() };
+        let threads     = self.threads.lock().unwrap();
+
+        if threads.len() < max_threads {
+            // Create a new thread
+            let new_thread = SchedulerThread::new();
+            self.threads.lock().unwrap().push(new_thread);
+            
+            true
+        } else {
+            // Can't spawn a new thread
+            false
+        }
+    }
+
+    ///
     /// Wakes a thread to run a dormant queue. Returns true if a thread was woken up
     ///
     fn schedule_thread(&self) -> bool {
@@ -289,7 +307,19 @@ impl Scheduler {
         let queues = self.queues.clone();
 
         // Schedule work on this dormant thread
-        self.schedule_dormant(move || Self::next_to_run(&queues), move |work| work.drain())
+        if !self.schedule_dormant(move || Self::next_to_run(&queues), move |work| work.drain()) {
+            // Try to create a new thread
+            if self.spawn_thread_if_less_than_maximum() {
+                // Try harder to schedule this task if a thread was created
+                self.schedule_thread()
+            } else {
+                // Couldn't schedule on an existing thread or create a new one
+                false
+            }
+        } else {
+            // Successfully scheduled
+            true
+        }
     }
 
     ///
@@ -360,80 +390,107 @@ mod test {
     use super::*;
     use std::time::*;
 
-    #[test]
-    fn can_schedule_async() {
+    fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
         let (tx, rx)    = channel();
-        let queue       = queue();
+        let (tx1, tx2)  = (tx.clone(), tx.clone());
 
-        async(&queue, move || {
-            tx.send(42).unwrap();
+        spawn(move || {
+            action();
+            tx1.send(true).ok();
         });
 
-        assert!(rx.recv().unwrap() == 42);
+        spawn(move || {
+            sleep(Duration::from_millis(millis));
+            tx2.send(false).ok();
+        });
+
+        if rx.recv().unwrap() == false {
+            panic!("Timeout");
+        }
     }
 
     #[test]
-    fn can_schedule_after_queue_released() {
-        {
+    fn can_schedule_async() {
+        timeout(|| {
             let (tx, rx)    = channel();
-            let queue1      = queue();
+            let queue       = queue();
 
-            async(&queue1, move || {
+            async(&queue, move || {
                 tx.send(42).unwrap();
             });
 
             assert!(rx.recv().unwrap() == 42);
-        }
+        }, 100);
+    }
 
-        {
-            let (tx, rx)    = channel();
-            let queue2      = queue();
+    #[test]
+    fn can_schedule_after_queue_released() {
+        timeout(|| {
+            {
+                let (tx, rx)    = channel();
+                let queue1      = queue();
 
-            async(&queue2, move || {
-                tx.send(43).unwrap();
-            });
+                async(&queue1, move || {
+                    tx.send(42).unwrap();
+                });
 
-            assert!(rx.recv().unwrap() == 43);
-        }
+                assert!(rx.recv().unwrap() == 42);
+            }
+
+            {
+                let (tx, rx)    = channel();
+                let queue2      = queue();
+
+                async(&queue2, move || {
+                    tx.send(43).unwrap();
+                });
+
+                assert!(rx.recv().unwrap() == 43);
+            }
+        }, 100);
     }
 
     #[test]
     fn will_schedule_in_order() {
-        let (tx, rx)    = channel();
-        let queue       = queue();
+        timeout(|| {
+            let (tx, rx)    = channel();
+            let queue       = queue();
 
-        let (tx1, tx2)  = (tx.clone(), tx.clone());
+            let (tx1, tx2)  = (tx.clone(), tx.clone());
 
-        async(&queue, move || {
-            sleep(Duration::from_millis(100));
-            tx1.send(1).unwrap();
-        });
-        async(&queue, move || {
-            tx2.send(2).unwrap();
-        });
+            async(&queue, move || {
+                sleep(Duration::from_millis(100));
+                tx1.send(1).unwrap();
+            });
+            async(&queue, move || {
+                tx2.send(2).unwrap();
+            });
 
-        assert!(rx.recv().unwrap() == 1);
-        assert!(rx.recv().unwrap() == 2);
+            assert!(rx.recv().unwrap() == 1);
+            assert!(rx.recv().unwrap() == 2);
+        }, 500);
     }
 
     #[test]
     fn will_schedule_separate_queues_in_parallel() {
-        let (tx, rx)        = channel();
-        let queue1          = queue();
-        let queue2          = queue();
-        let queue2_has_run  = Arc::new(Mutex::new(false));
+        timeout(|| {
+            let (tx, rx)        = channel();
+            let queue1          = queue();
+            let queue2          = queue();
+            let queue2_has_run  = Arc::new(Mutex::new(false));
 
-        let queue1_check = queue2_has_run.clone();
+            let queue1_check = queue2_has_run.clone();
 
-        async(&queue1, move || {
-            // The other task needs to start within 100ms for this to work
-            sleep(Duration::from_millis(100));
-            tx.send(*queue1_check.lock().unwrap()).unwrap();
-        });
-        async(&queue2, move || {
-            *queue2_has_run.lock().unwrap() = true;
-        });
+            async(&queue1, move || {
+                // The other task needs to start within 100ms for this to work
+                sleep(Duration::from_millis(100));
+                tx.send(*queue1_check.lock().unwrap()).unwrap();
+            });
+            async(&queue2, move || {
+                *queue2_has_run.lock().unwrap() = true;
+            });
 
-        assert!(rx.recv().unwrap() == true);
+            assert!(rx.recv().unwrap() == true);
+        }, 500);
     }
 }
