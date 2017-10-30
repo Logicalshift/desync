@@ -43,6 +43,9 @@
 //! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
+// TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
+// TODO: a way to suspend and resume a queue would be a handy addition as it would let us 'pipe in' stuff from the futures library (and maybe do other things where other synchronisation is required)
+
 use std::mem;
 use std::sync::*;
 use std::thread::*;
