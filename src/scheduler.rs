@@ -498,8 +498,33 @@ impl Scheduler {
         
             RunAction::WaitForBackground => {
                 // Queue a job that unparks this thread when done
-                // TODO: need to do this while we *know* the queue is running!
-                unimplemented!()
+                let pair    = Arc::new((Mutex::new(None), Condvar::new()));
+                let pair2   = pair.clone();
+
+                // Signal the condvar when the result is ready
+                self.async(queue, move || {
+                    let &(ref result, ref cvar) = &*pair2;
+
+                    // Run the job
+                    let actual_result = job();
+
+                    // Set the result and notify the waiting thread
+                    *result.lock().unwrap() = Some(actual_result);
+                    cvar.notify_one();
+                });
+
+                // Wait for the result to arrive
+                let &(ref lock, ref cvar) = &*pair;
+                let mut result = lock.lock().unwrap();
+                
+                while result.is_none() {
+                    result = cvar.wait(result).unwrap();
+                }
+
+                // Get the final result by swapping it out of the mutex
+                let mut final_result    = None;
+                mem::swap(&mut *result, &mut final_result);
+                final_result.unwrap()
             }
         }
     }
