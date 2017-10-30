@@ -1,0 +1,8 @@
+[package]
+name = "desync"
+version = "0.1.0"
+authors = ["Andrew Hunter <andrew@logicalshift.io>"]
+license = "Apache-2.0"
+
+[dependencies]
+lazy_static = "0.2"
