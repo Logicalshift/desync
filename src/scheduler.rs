@@ -221,8 +221,8 @@ impl Scheduler {
     ///
     /// Attempts to schedule a task on a dormant thread
     ///
-    fn schedule_dormant<TFn>(&self, job: TFn) -> bool
-    where TFn: 'static+Send+FnOnce() -> () {
+    fn schedule_dormant<NextJob, RunJob, JobData>(&self, next_job: NextJob, job: RunJob) -> bool
+    where RunJob: 'static+Send+Fn(JobData) -> (), NextJob: 'static+Send+Fn() -> Option<JobData> {
         let threads = self.threads.lock().unwrap();
 
         for thread in threads.iter() {
@@ -233,12 +233,29 @@ impl Scheduler {
 
                 *busy = true;
                 thread.run(Job::new(move || {
-                    // Run the job
-                    job();
+                    let mut done = false;
 
-                    // Thread is dormant again once this job completes
-                    let mut busy = also_busy.lock().unwrap();
-                    *busy = false;
+                    while !done {
+                        // Obtain the next job
+                        let job_data = {
+                            let mut busy = also_busy.lock().unwrap();
+                            let job_data = next_job();
+
+                            // If there's no next job, then this thread is no longer busy
+                            if job_data.is_none() {
+                                *busy = false;
+                            }
+
+                            job_data
+                        };
+
+                        // Run the job if there is one, stop the thread if there is not
+                        if let Some(job_data) = job_data {
+                            job(job_data);
+                        } else {
+                            done = true;
+                        }
+                    }
                 }));
 
                 return true;
@@ -256,14 +273,8 @@ impl Scheduler {
         // Find a dormant thread and activate it
         let queues = self.queues.clone();
 
-        self.schedule_dormant(move || {
-            // Run queues until there are no more to run, then become dormant again
-            while let Some(work) = Self::next_to_run(&queues) {
-                work.drain();
-            }
-
-            // TODO: if there are no dormant threads, there's a race here at the moment as this thread won't get rescheduled while it's 'dying'
-        })
+        // Schedule work on this dormant thread
+        self.schedule_dormant(move || Self::next_to_run(&queues), move |work| work.drain())
     }
 
     ///
