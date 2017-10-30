@@ -701,6 +701,9 @@ mod test {
                 *async_val.lock().unwrap() = 42;
             });
 
+            // Make sure a thread wakes up and claims the queue before we do
+            sleep(Duration::from_millis(10));
+
             let new_val = sync(&queue, move || { 
                 let v = val.lock().unwrap();
                 *v
@@ -713,25 +716,24 @@ mod test {
     #[test]
     fn sync_drains_with_no_threads() {
         timeout(|| {
+            let scheduler   = Scheduler::new();
             let val         = Arc::new(Mutex::new(0));
             let queue       = queue();
 
             // Even with 0 threads, sync actions should still run (by draining on the current thread)
-            scheduler().set_max_threads(0);
-            scheduler().despawn_threads_if_overloaded();
+            scheduler.set_max_threads(0);
+            scheduler.despawn_threads_if_overloaded();
 
             let async_val = val.clone();
-            async(&queue, move || {
+            scheduler.async(&queue, move || {
                 sleep(Duration::from_millis(100));
                 *async_val.lock().unwrap() = 42;
             });
 
-            let new_val = sync(&queue, move || { 
+            let new_val = scheduler.sync(&queue, move || { 
                 let v = val.lock().unwrap();
                 *v
             });
-
-            scheduler().set_max_threads(10);
 
             assert!(new_val == 42);
         }, 500);
