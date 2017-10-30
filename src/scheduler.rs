@@ -562,6 +562,17 @@ mod test {
     #[test]
     fn can_schedule_sync() {
         timeout(|| {
+            let queue   = queue();
+
+            let new_val = sync(&queue, move || 42);
+
+            assert!(new_val == 42);
+        }, 100);
+    }
+
+    #[test]
+    fn can_schedule_sync_after_async() {
+        timeout(|| {
             let val         = Arc::new(Mutex::new(0));
             let queue       = queue();
 
