@@ -360,13 +360,12 @@ mod test {
 
         async(&queue1, move || {
             sleep(Duration::from_millis(100));
-            assert!(*queue1_check.lock().unwrap() == true);
-            tx.send(()).unwrap();
+            tx.send(*queue1_check.lock().unwrap()).unwrap();
         });
         async(&queue2, move || {
             *queue2_has_run.lock().unwrap() = true;
         });
 
-        rx.recv().unwrap();
+        assert!(rx.recv().unwrap() == true);
     }
 }
