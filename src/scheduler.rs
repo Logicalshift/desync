@@ -20,7 +20,7 @@ lazy_static! {
 /// The default maximum number of threads in a scheduler 
 ///
 fn initial_max_threads() -> usize {
-    MIN_THREADS.min(num_cpus::get()*2)
+    MIN_THREADS.max(num_cpus::get()*2)
 }
 
 ///
@@ -285,12 +285,12 @@ impl Scheduler {
     ///
     fn spawn_thread_if_less_than_maximum(&self) -> bool {
         let max_threads = { *self.max_threads.lock().unwrap() };
-        let threads     = self.threads.lock().unwrap();
+        let mut threads = self.threads.lock().unwrap();
 
         if threads.len() < max_threads {
             // Create a new thread
             let new_thread = SchedulerThread::new();
-            self.threads.lock().unwrap().push(new_thread);
+            threads.push(new_thread);
             
             true
         } else {
