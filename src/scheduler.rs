@@ -289,9 +289,21 @@ impl Scheduler {
     /// Creates a new job queue for this scheduler
     ///
     pub fn create_job_queue(&self) -> Arc<JobQueue> {
+        // Create the  new queue
         let new_queue = Arc::new(JobQueue::new());
 
-        self.queues.lock().unwrap().push(Arc::downgrade(&new_queue));
+        let mut queues = self.queues.lock().unwrap();
+
+        // Replace an existing weak queue if possible
+        let weak_pos = queues.iter().position(|q| q.upgrade().is_none());
+
+        if let Some(weak_pos) = weak_pos {
+            // Replace a queue that was present but is no longer in use
+            queues[weak_pos] = Arc::downgrade(&new_queue);
+        } else {
+            // Add to the queues managed by this object (as a weak reference)
+            queues.push(Arc::downgrade(&new_queue));
+        }
 
         new_queue
     }
@@ -343,6 +355,31 @@ mod test {
         });
 
         assert!(rx.recv().unwrap() == 42);
+    }
+
+    #[test]
+    fn can_schedule_after_queue_released() {
+        {
+            let (tx, rx)    = channel();
+            let queue1      = queue();
+
+            async(&queue1, move || {
+                tx.send(42).unwrap();
+            });
+
+            assert!(rx.recv().unwrap() == 42);
+        }
+
+        {
+            let (tx, rx)    = channel();
+            let queue2      = queue();
+
+            async(&queue2, move || {
+                tx.send(43).unwrap();
+            });
+
+            assert!(rx.recv().unwrap() == 43);
+        }
     }
 
     #[test]
