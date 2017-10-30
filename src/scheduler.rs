@@ -210,6 +210,9 @@ impl Scheduler {
     pub fn set_max_threads(&self, max_threads: usize) {
         // Update the maximum number of threads we can spawn
         { *self.max_threads.lock().unwrap() = max_threads };
+
+        // Try to schedule a thread if we can
+        self.schedule_thread();
     }
 
     ///
@@ -402,57 +405,102 @@ impl Scheduler {
     /// in the specified queue. This function will not return until the job has completed.
     ///
     pub fn sync<Result: 'static+Send, TFn: 'static+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
-        // When the task runs on the queue, we'll put it here
-        let result = Arc::new(Mutex::new(None));
+        enum RunAction {
+            /// The queue is empty: call the function directly and don't bother with storing a result
+            Immediate,
+
+            /// The queue is not empty but not running: drain on this thread so we get to the sync op
+            DrainOnThisThread,
+
+            /// The queue is running in the background
+            WaitForBackground
+        }
 
         // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
-        let run_on_this_thread = {
-            let mut is_running = queue.running.lock().unwrap();
+        let run_action = {
+            let queue_data      = queue.queue.lock().unwrap();
+            let mut is_running  = queue.running.lock().unwrap();
 
             if !*is_running {
                 // The queue is idle: we're going to run it until this task is done
                 *is_running = true;
-                true
+
+                if queue_data.len() == 0 {
+                    // The queue is idle and has nothing pending: just call the function without scheduling it
+                    RunAction::Immediate
+                } else {
+                    // The queue is idle and has stuff pending: use this thread to actually drain it as the other threads are busy
+                    RunAction::DrainOnThisThread
+                }
             } else {
                 // Queue is running elsewhere, so we need to park this thread instead
-                false
+                RunAction::WaitForBackground
             }
         };
 
-        if run_on_this_thread {
-            // Queue a job that'll run the requested job and then set the result
-            let queue_result = result.clone();
-            queue.queue(Job::new(move || {
-                let job_result = job();
-                *queue_result.lock().unwrap() = Some(job_result);
-            }));
+        match run_action {
+            RunAction::Immediate => {
+                // Call the function to get the result
+                let result = job();
 
-            // While there is no result, run a job from the queue
-            while result.lock().unwrap().is_none() {
-                if let Some(mut job) = queue.dequeue() {
-                    job.run();
-                } else {
-                    panic!("Queue drained before synchronous job could execute");
+                // Not running any more
+                let reschedule = {
+                    let queue_data      = queue.queue.lock().unwrap();
+                    let mut is_running  = queue.running.lock().unwrap();
+
+                    *is_running = false;
+
+                    // Schedule a thread to restart the queue if more things were queued
+                    queue_data.len() > 0
+                };
+
+                if reschedule {
+                    self.schedule_thread();
                 }
+
+                result
+            },
+
+            RunAction::DrainOnThisThread => {
+                // When the task runs on the queue, we'll put it here
+                let result = Arc::new(Mutex::new(None));
+
+                // Queue a job that'll run the requested job and then set the result
+                let queue_result = result.clone();
+                queue.queue(Job::new(move || {
+                    let job_result = job();
+                    *queue_result.lock().unwrap() = Some(job_result);
+                }));
+
+                // While there is no result, run a job from the queue
+                while result.lock().unwrap().is_none() {
+                    if let Some(mut job) = queue.dequeue() {
+                        job.run();
+                    } else {
+                        panic!("Queue drained before synchronous job could execute");
+                    }
+                }
+
+                // Stop running the queue as soon as we have the result
+                *queue.running.lock().unwrap() = false;
+
+                // Schedule a thread so the queue can start running again if there are any extra jobs remaining
+                self.schedule_thread();
+
+                // Get the final result by swapping it out of the mutex
+                let mut final_result    = None;
+                let mut old_result      = result.lock().unwrap();
+
+                mem::swap(&mut *old_result, &mut final_result);
+
+                final_result.unwrap()
+            },
+        
+            RunAction::WaitForBackground => {
+                // Queue a job that unparks this thread when done
+                // TODO: need to do this while we *know* the queue is running!
+                unimplemented!()
             }
-
-            // Stop running the queue as soon as we have the result
-            *queue.running.lock().unwrap() = false;
-
-            // Schedule a thread so the queue can start running again if there are any extra jobs remaining
-            self.schedule_thread();
-
-            // Get the final result by swapping it out of the mutex
-            let mut final_result    = None;
-            let mut old_result      = result.lock().unwrap();
-
-            mem::swap(&mut *old_result, &mut final_result);
-
-            final_result.unwrap()
-        } else {
-            // Queue a job that unparks this thread when done
-            // TODO: need to do this while we *know* the queue is running!
-            unimplemented!()
         }
     }
 }
@@ -622,6 +670,26 @@ mod test {
     }
 
     #[test]
+    fn can_reschedule_after_immediate_sync() {
+        timeout(|| {
+            let (tx, rx)    = channel();
+            let queue       = queue();
+            let queue_ref   = queue.clone();
+
+            let new_val = sync(&queue, move || {
+                async(&queue_ref, move || {
+                    tx.send(43).unwrap();
+                });
+
+                42
+            });
+
+            assert!(new_val == 42);
+            assert!(rx.recv().unwrap() == 43);
+        }, 500);
+    }
+
+    #[test]
     fn can_schedule_sync_after_async() {
         timeout(|| {
             let val         = Arc::new(Mutex::new(0));
@@ -639,6 +707,33 @@ mod test {
             });
 
             assert!(new_val == 42);
-        }, 100);
+        }, 500);
+    }
+
+    #[test]
+    fn sync_drains_with_no_threads() {
+        timeout(|| {
+            let val         = Arc::new(Mutex::new(0));
+            let queue       = queue();
+
+            // Even with 0 threads, sync actions should still run (by draining on the current thread)
+            scheduler().set_max_threads(0);
+            scheduler().despawn_threads_if_overloaded();
+
+            let async_val = val.clone();
+            async(&queue, move || {
+                sleep(Duration::from_millis(100));
+                *async_val.lock().unwrap() = 42;
+            });
+
+            let new_val = sync(&queue, move || { 
+                let v = val.lock().unwrap();
+                *v
+            });
+
+            scheduler().set_max_threads(10);
+
+            assert!(new_val == 42);
+        }, 500);
     }
 }
