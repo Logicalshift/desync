@@ -45,7 +45,6 @@
 
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: a way to suspend and resume a queue would be a handy addition as it would let us 'pipe in' stuff from the futures library (and maybe do other things where other synchronisation is required)
-// TODO: the way of determining the next queue to run will favour queues generated earlier on: we should probably use a more intelligent algorithm than that
 
 use std::mem;
 use std::sync::*;
@@ -113,7 +112,7 @@ where TFn: Send+FnOnce() -> () {
 ///
 pub struct Scheduler {
     /// The queues that are active in the scheduler
-    queues: Arc<Mutex<Vec<Weak<JobQueue>>>>,
+    schedule: Arc<Mutex<VecDeque<Arc<JobQueue>>>>,
 
     /// Active threads
     threads: Mutex<Vec<SchedulerThread>>,
@@ -131,7 +130,7 @@ enum QueueState {
     Idle,
 
     /// Queue has been queued up to run but isn't running yet
-    _Pending,
+    Pending,
 
     /// Queue has been assigned to a thread and is currently running
     Running
@@ -152,6 +151,7 @@ struct JobQueueCore {
 /// A job queue provides a list of jobs to perform in order
 /// 
 pub struct JobQueue {
+    /// The shared data for this queue is stored within a mutex
     core: Mutex<JobQueueCore>
 }
 
@@ -211,16 +211,6 @@ impl JobQueue {
     }
 
     ///
-    /// Adds a new job to this queue, returns true if the queue is dormant and needs to be started
-    ///
-    fn queue<TJob: 'static+ScheduledJob>(&self, job: TJob) -> bool {
-        let mut core = self.core.lock().unwrap();
-
-        core.queue.push_back(Box::new(job));
-        core.state == QueueState::Idle
-    }
-
-    ///
     /// If there are any jobs waiting, dequeues the next one
     ///
     fn dequeue(&self) -> Option<Box<ScheduledJob>> {
@@ -262,7 +252,7 @@ impl Scheduler {
     /// 
     fn new() -> Scheduler {
         let result = Scheduler { 
-            queues:         Arc::new(Mutex::new(vec![])),
+            schedule:       Arc::new(Mutex::new(VecDeque::new())),
             threads:        Mutex::new(vec![]),
             max_threads:    Mutex::new(initial_max_threads())
         };
@@ -310,21 +300,18 @@ impl Scheduler {
     /// Finds the next queue that should be run. If this returns successfully, the queue will 
     /// be marked as running.
     /// 
-    fn next_to_run(queues: &Arc<Mutex<Vec<Weak<JobQueue>>>>) -> Option<Arc<JobQueue>> {
+    fn next_to_run(schedule: &Arc<Mutex<VecDeque<Arc<JobQueue>>>>) -> Option<Arc<JobQueue>> {
         // Search the queues...
-        let queues = queues.lock().unwrap();
+        let mut schedule = schedule.lock().unwrap();
 
-        // Find a queue where is_running is false
-        for q in queues.iter() {
-            // Queue is a weak ref, check that it's still in use
-            if let Some(q) = q.upgrade() {
-                // If the queue is not running, then mark it as running and return it
-                let mut core = q.core.lock().unwrap();
-                if core.state != QueueState::Running {
-                    // Clone here is necessary because the is_running update is borrowing q
-                    core.state = QueueState::Running;
-                    return Some(q.clone());
-                }
+        // Find a queue where the state is pending
+        while let Some(q) = schedule.pop_front() {
+            let mut core = q.core.lock().unwrap();
+
+            if core.state == QueueState::Pending {
+                // Queue is ready to run. Mark it as running and return it
+                core.state = QueueState::Running;
+                return Some(q.clone());
             }
         }
 
@@ -407,10 +394,10 @@ impl Scheduler {
     ///
     fn schedule_thread(&self) -> bool {
         // Find a dormant thread and activate it
-        let queues = self.queues.clone();
+        let schedule = self.schedule.clone();
 
         // Schedule work on this dormant thread
-        if !self.schedule_dormant(move || Self::next_to_run(&queues), move |work| work.drain()) {
+        if !self.schedule_dormant(move || Self::next_to_run(&schedule), move |work| work.drain()) {
             // Try to create a new thread
             if self.spawn_thread_if_less_than_maximum() {
                 // Try harder to schedule this task if a thread was created
@@ -426,6 +413,35 @@ impl Scheduler {
     }
 
     ///
+    /// Schedules a queue if it is not already pending
+    ///
+    fn reschedule_queue(&self, queue: &Arc<JobQueue>) {
+        let reschedule = {
+            let mut core = queue.core.lock().unwrap();
+
+            if core.state != QueueState::Pending {
+                // Schedule a thread to restart the queue if more things were queued
+                if core.queue.len() > 0 {
+                    // Need to schedule the queue after this event
+                    core.state = QueueState::Pending;
+                    true
+                } else {
+                    // Queue is empty and can go back to idle
+                    core.state = QueueState::Idle;
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if reschedule {
+            self.schedule.lock().unwrap().push_back(queue.clone());
+            self.schedule_thread();
+        }
+    }
+
+    ///
     /// Spawns a thread in this scheduler
     ///
     pub fn spawn_thread(&self) {
@@ -437,22 +453,7 @@ impl Scheduler {
     /// Creates a new job queue for this scheduler
     ///
     pub fn create_job_queue(&self) -> Arc<JobQueue> {
-        // Create the  new queue
         let new_queue = Arc::new(JobQueue::new());
-
-        let mut queues = self.queues.lock().unwrap();
-
-        // Replace an existing weak queue if possible
-        let weak_pos = queues.iter().position(|q| q.upgrade().is_none());
-
-        if let Some(weak_pos) = weak_pos {
-            // Replace a queue that was present but is no longer in use
-            queues[weak_pos] = Arc::downgrade(&new_queue);
-        } else {
-            // Add to the queues managed by this object (as a weak reference)
-            queues.push(Arc::downgrade(&new_queue));
-        }
-
         new_queue
     }
 
@@ -461,8 +462,29 @@ impl Scheduler {
     /// in the specified queue and as soon as a thread is available to run it.
     ///
     pub fn async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
-        if queue.queue(Job::new(job)) {
-            // A true result indicates that the job was scheduled but the queue is not running. Try to schedule a thread if this occurs.
+        let schedule_queue = {
+            let job         = Job::new(job);
+            let mut core    = queue.core.lock().unwrap();
+
+            // Push the job onto the queue
+            core.queue.push_back(Box::new(job));
+
+            if core.state == QueueState::Idle {
+                // If the queue is idle, then move it to pending
+                core.state = QueueState::Pending;
+                true
+            } else {
+                // If the queue is in any other state, then we leave it alone
+                false
+            }
+        };
+
+        // If when we were queuing the jobs we found that the queue was idle, then move it to the pending list
+        if schedule_queue {
+            // Add the queue to the schedule
+            self.schedule.lock().unwrap().push_back(queue.clone());
+
+            // Wake up a thread to run it if we can
             self.schedule_thread();
         }
     }
@@ -502,20 +524,10 @@ impl Scheduler {
         let run_action = {
             let mut core = queue.core.lock().unwrap();
 
-            if core.state != QueueState::Running {
-                // The queue is idle: we're going to run it until this task is done
-                core.state = QueueState::Running;
-
-                if core.queue.len() == 0 {
-                    // The queue is idle and has nothing pending: just call the function without scheduling it
-                    RunAction::Immediate
-                } else {
-                    // The queue is idle and has stuff pending: use this thread to actually drain it as the other threads are busy
-                    RunAction::DrainOnThisThread
-                }
-            } else {
-                // Queue is running elsewhere, so we need to park this thread instead
-                RunAction::WaitForBackground
+            match core.state {
+                QueueState::Running => RunAction::WaitForBackground,
+                QueueState::Pending => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
+                QueueState::Idle    => { core.state = QueueState::Running; RunAction::Immediate }
             }
         };
 
@@ -525,18 +537,7 @@ impl Scheduler {
                 let result = job();
 
                 // Not running any more
-                let reschedule = {
-                    let mut core = queue.core.lock().unwrap();
-
-                    core.state = QueueState::Idle;
-
-                    // Schedule a thread to restart the queue if more things were queued
-                     core.queue.len() > 0
-                };
-
-                if reschedule {
-                    self.schedule_thread();
-                }
+                self.reschedule_queue(queue);
 
                 result
             },
@@ -546,11 +547,13 @@ impl Scheduler {
                 let result = Arc::new(Mutex::new(None));
 
                 // Queue a job that'll run the requested job and then set the result
-                let queue_result = result.clone();
-                queue.queue(Job::new(move || {
+                let queue_result    = result.clone();
+                let result_job      = Job::new(move || {
                     let job_result = job();
                     *queue_result.lock().unwrap() = Some(job_result);
-                }));
+                });
+
+                queue.core.lock().unwrap().queue.push_back(Box::new(result_job));
 
                 // While there is no result, run a job from the queue
                 while result.lock().unwrap().is_none() {
@@ -561,11 +564,12 @@ impl Scheduler {
                     }
                 }
 
-                // Stop running the queue as soon as we have the result
-                queue.core.lock().unwrap().state = QueueState::Idle;
-
-                // Schedule a thread so the queue can start running again if there are any extra jobs remaining
-                self.schedule_thread();
+                // Reschedule the queue if there are any events left pending
+                // Note: the queue is already pending when we start running events from it here.
+                // This means it'll get dequeued by a thread eventually: maybe while it's running
+                // here. As we've set the queue state to running while we're busy, the thread won't
+                // start the queue while it's already running.
+                self.reschedule_queue(queue);
 
                 // Get the final result by swapping it out of the mutex
                 let mut final_result    = None;
