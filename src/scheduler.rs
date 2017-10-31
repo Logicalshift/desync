@@ -45,6 +45,7 @@
 
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: a way to suspend and resume a queue would be a handy addition as it would let us 'pipe in' stuff from the futures library (and maybe do other things where other synchronisation is required)
+// TODO: the way of determining the next queue to run will favour queues generated earlier on: we should probably use a more intelligent algorithm than that
 
 use std::mem;
 use std::sync::*;
