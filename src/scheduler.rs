@@ -123,14 +123,36 @@ pub struct Scheduler {
 }
 
 ///
+/// Represents the state of a job queue
+///
+#[derive(PartialEq)]
+enum QueueState {
+    /// Queue is currently not running and not ready to run
+    Idle,
+
+    /// Queue has been queued up to run but isn't running yet
+    _Pending,
+
+    /// Queue has been assigned to a thread and is currently running
+    Running
+}
+
+///
+/// Structure protected by the jobqueue matrix
+///
+struct JobQueueCore {
+    /// The jobs that are scheduled on this queue
+    queue: VecDeque<Box<ScheduledJob>>,
+
+    /// The current state of this queue
+    state: QueueState
+}
+
+///
 /// A job queue provides a list of jobs to perform in order
 /// 
 pub struct JobQueue {
-    /// Jobs scheduled on this queue
-    queue: Mutex<VecDeque<Box<ScheduledJob>>>,
-
-    /// True while this queue is running
-    running: Mutex<bool>
+    core: Mutex<JobQueueCore>
 }
 
 ///
@@ -181,8 +203,10 @@ impl JobQueue {
     ///
     fn new() -> JobQueue {
         JobQueue { 
-            queue:      Mutex::new(VecDeque::new()),
-            running:    Mutex::new(false)
+            core: Mutex::new(JobQueueCore {
+                queue: VecDeque::new(),
+                state: QueueState::Idle
+            })
         }
     }
 
@@ -190,21 +214,18 @@ impl JobQueue {
     /// Adds a new job to this queue, returns true if the queue is dormant and needs to be started
     ///
     fn queue<TJob: 'static+ScheduledJob>(&self, job: TJob) -> bool {
-        let mut queue   = self.queue.lock().unwrap();
-        let running     = self.running.lock().unwrap();
+        let mut core = self.core.lock().unwrap();
 
-        queue.push_back(Box::new(job));
-
-        !*running
+        core.queue.push_back(Box::new(job));
+        core.state == QueueState::Idle
     }
 
     ///
     /// If there are any jobs waiting, dequeues the next one
     ///
     fn dequeue(&self) -> Option<Box<ScheduledJob>> {
-        let mut queue = self.queue.lock().unwrap();
-
-        queue.pop_front()
+        let mut core = self.core.lock().unwrap();
+        core.queue.pop_front()
     }
 
     ///
@@ -221,12 +242,11 @@ impl JobQueue {
 
             // Try to move back to the 'not running' state
             {
-                let queue       = self.queue.lock().unwrap();
-                let mut running = self.running.lock().unwrap();
+                let mut core = self.core.lock().unwrap();
 
-                // If the queue is empty at the point where we obtain the 'running' lock, we can deactivate ourselves
-                if queue.len() == 0 {
-                    *running    = false;
+                // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
+                if core.queue.len() == 0 {
+                    core.state  = QueueState::Idle;
                     done        = true;
                 }
             }
@@ -299,10 +319,10 @@ impl Scheduler {
             // Queue is a weak ref, check that it's still in use
             if let Some(q) = q.upgrade() {
                 // If the queue is not running, then mark it as running and return it
-                let mut is_running = q.running.lock().unwrap();
-                if !*is_running {
+                let mut core = q.core.lock().unwrap();
+                if core.state != QueueState::Running {
                     // Clone here is necessary because the is_running update is borrowing q
-                    *is_running = true;
+                    core.state = QueueState::Running;
                     return Some(q.clone());
                 }
             }
@@ -480,14 +500,13 @@ impl Scheduler {
 
         // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
         let run_action = {
-            let queue_data      = queue.queue.lock().unwrap();
-            let mut is_running  = queue.running.lock().unwrap();
+            let mut core = queue.core.lock().unwrap();
 
-            if !*is_running {
+            if core.state != QueueState::Running {
                 // The queue is idle: we're going to run it until this task is done
-                *is_running = true;
+                core.state = QueueState::Running;
 
-                if queue_data.len() == 0 {
+                if core.queue.len() == 0 {
                     // The queue is idle and has nothing pending: just call the function without scheduling it
                     RunAction::Immediate
                 } else {
@@ -507,13 +526,12 @@ impl Scheduler {
 
                 // Not running any more
                 let reschedule = {
-                    let queue_data      = queue.queue.lock().unwrap();
-                    let mut is_running  = queue.running.lock().unwrap();
+                    let mut core = queue.core.lock().unwrap();
 
-                    *is_running = false;
+                    core.state = QueueState::Idle;
 
                     // Schedule a thread to restart the queue if more things were queued
-                    queue_data.len() > 0
+                     core.queue.len() > 0
                 };
 
                 if reschedule {
@@ -544,7 +562,7 @@ impl Scheduler {
                 }
 
                 // Stop running the queue as soon as we have the result
-                *queue.running.lock().unwrap() = false;
+                queue.core.lock().unwrap().state = QueueState::Idle;
 
                 // Schedule a thread so the queue can start running again if there are any extra jobs remaining
                 self.schedule_thread();
