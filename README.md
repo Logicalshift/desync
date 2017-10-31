@@ -1,9 +1,15 @@
 # Desync
 
-This rust library provides an alternative synchronisation mechanism to the usual threads/mutexes
+This library provides an alternative synchronisation mechanism to the usual threads/mutexes
 system. Instead of managing the threads, this focuses on managing the data, which largely
 does away with the need for many synchronisation primitives. Support for futures is provided
 to help interoperate with other Rust libraries.
+
+The main difference in approach is that while a 'traditional' mutual-exclusion based
+model focuses on managing access to data, this instead focuses on ordering access. Only
+one job can access data at a time because the jobs are always done in order. Defining
+the order of operations ahead of time makes it easier to reason about the runtime behaviour
+of a particular data structure.
 
 There is a single new synchronisation object: `Desync`. You create one like this:
 
