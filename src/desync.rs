@@ -1,6 +1,8 @@
 use super::scheduler::*;
 
 use std::sync::Arc;
+use futures::sync::oneshot;
+use futures::future::Future;
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
@@ -84,6 +86,21 @@ impl<T: 'static+Send> Desync<T> {
 
         result
     }
+
+    ///
+    /// Performs an operation asynchronously on this thread, returning the result via a future.
+    ///
+    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<Future<Item=Item, Error=oneshot::Canceled>>
+    where TFn: 'static+Send+FnOnce(&mut T) -> Item {
+        let (send, receive) = oneshot::channel();
+
+        self.async(|data| {
+            let result = job(data);
+            send.send(result).ok();
+        });
+
+        Box::new(receive)
+    }
 }
 
 impl<T: Send> Drop for Desync<T> {
@@ -122,6 +139,22 @@ mod test {
         });
         
         assert!(desynced.sync(|data| data.val) == 42);
+    }
+
+    #[test]
+    fn can_update_data_with_future() {
+        use futures::executor;
+
+        let desynced = Desync::new(TestData { val: 0 });
+
+        desynced.async(|data| {
+            sleep(Duration::from_millis(100));
+            data.val = 42;
+        });
+
+        let mut future = executor::spawn(desynced.future(|data| data.val));
+        
+        assert!(future.wait_future().unwrap() == 42);
     }
 
     #[test]
