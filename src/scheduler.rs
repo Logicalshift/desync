@@ -54,6 +54,8 @@ use std::sync::mpsc::*;
 use std::collections::vec_deque::*;
 
 use num_cpus;
+use futures::future::Future;
+use futures::sync::oneshot;
 
 const MIN_THREADS: usize = 8;
 
@@ -446,6 +448,21 @@ impl Scheduler {
     }
 
     ///
+    /// Schedules a job to run and returns a future for retrieving the result
+    ///
+    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> Box<Future<Item=Item, Error=oneshot::Canceled>>
+    where TFn: 'static+Send+FnOnce() -> Item {
+        let (send, receive) = oneshot::channel();
+
+        self.async(queue, move || {
+            let res = job();
+            send.send(res).ok();
+        });
+
+        Box::new(receive)
+    }
+
+    ///
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
@@ -594,6 +611,14 @@ pub fn queue() -> Arc<JobQueue> {
 ///
 pub fn async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
     scheduler().async(queue, job)
+}
+
+///
+/// Schedules a job to run and returns a future for retrieving the result
+///
+pub fn future<TFn, Item: 'static+Send>(queue: &Arc<JobQueue>, job: TFn) -> Box<Future<Item=Item, Error=oneshot::Canceled>>
+where TFn: 'static+Send+FnOnce() -> Item {
+    scheduler().future(queue, job)
 }
 
 ///
@@ -806,6 +831,21 @@ mod test {
             });
 
             assert!(new_val == 42);
+        }, 500);
+    }
+
+    #[test]
+    fn can_schedule_future() {
+        timeout(|| {
+            use futures::executor;
+
+            let queue       = queue();
+            let mut future  = executor::spawn(future(&queue, move || {
+                sleep(Duration::from_millis(100));
+                42
+            }));
+
+            assert!(future.wait_future().unwrap() == 42);
         }, 500);
     }
 }

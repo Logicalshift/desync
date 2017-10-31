@@ -7,3 +7,4 @@ license = "Apache-2.0"
 [dependencies]
 lazy_static     = "0.2"
 num_cpus        = "1.0"
+futures         = "0.1.16"
