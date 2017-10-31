@@ -216,7 +216,7 @@ impl JobQueue {
                 job.run();
             }
 
-            // Mark as not running any more
+            // Try to move back to the 'not running' state
             {
                 let queue       = self.queue.lock().unwrap();
                 let mut running = self.running.lock().unwrap();
