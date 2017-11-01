@@ -85,6 +85,14 @@ where TFn: Send+FnOnce() -> () {
     action: Option<TFn>
 }
 
+///
+/// The unsafe job does not manage the lifetime of its TFn
+///
+struct UnsafeJob {
+    // TODO: this can become Shared<> once that API stabilises
+    action: *const ScheduledJob
+}
+
 impl<TFn> Job<TFn> 
 where TFn: Send+FnOnce() -> () {
     fn new(action: TFn) -> Job<TFn> {
@@ -103,6 +111,29 @@ where TFn: Send+FnOnce() -> () {
             action();
         } else {
             panic!("Cannot schedule an action twice");
+        }
+    }
+}
+
+impl UnsafeJob {
+    ///
+    /// Creates an unsafe job. The referenced object should last as long as the job does
+    ///
+    fn new<'a>(action: &'a ScheduledJob) -> UnsafeJob {
+        let action_ptr: *const ScheduledJob = action;
+
+        // Transmute to remove the lifetime parameter :-/
+        // (We're safe provided this job is executed before the reference goes away)
+        unsafe { UnsafeJob { action: mem::transmute(action_ptr) } }
+    }
+}
+unsafe impl Send for UnsafeJob {}
+
+impl ScheduledJob for UnsafeJob {
+    fn run(&mut self) {
+        unsafe {
+            let action = self.action as *mut ScheduledJob;
+            (*action).run();
         }
     }
 }
@@ -508,7 +539,7 @@ impl Scheduler {
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
-    pub fn sync<Result: 'static+Send, TFn: 'static+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+    pub fn sync<'a, Result: 'a+Send, TFn: 'a+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         enum RunAction {
             /// The queue is empty: call the function directly and don't bother with storing a result
             Immediate,
@@ -547,13 +578,14 @@ impl Scheduler {
                 let result = Arc::new(Mutex::new(None));
 
                 // Queue a job that'll run the requested job and then set the result
-                let queue_result    = result.clone();
-                let result_job      = Job::new(move || {
+                let queue_result        = result.clone();
+                let result_job: Box<'a+ScheduledJob>   = Box::new(Job::new(move || {
                     let job_result = job();
                     *queue_result.lock().unwrap() = Some(job_result);
-                });
+                }));
+                let unsafe_result_job   = UnsafeJob::new(&*result_job);
 
-                queue.core.lock().unwrap().queue.push_back(Box::new(result_job));
+                queue.core.lock().unwrap().queue.push_back(Box::new(unsafe_result_job));
 
                 // While there is no result, run a job from the queue
                 while result.lock().unwrap().is_none() {
@@ -585,8 +617,8 @@ impl Scheduler {
                 let pair    = Arc::new((Mutex::new(None), Condvar::new()));
                 let pair2   = pair.clone();
 
-                // Signal the condvar when the result is ready
-                self.async(queue, move || {
+                // Safe job that signals the condvar when needed
+                let job     = Box::new(Job::new(move || {
                     let &(ref result, ref cvar) = &*pair2;
 
                     // Run the job
@@ -595,9 +627,13 @@ impl Scheduler {
                     // Set the result and notify the waiting thread
                     *result.lock().unwrap() = Some(actual_result);
                     cvar.notify_one();
-                });
+                }));
+                
+                // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
+                let unsafe_job = Box::new(UnsafeJob::new(&*job));
+                queue.core.lock().unwrap().queue.push_back(unsafe_job);
 
-                // Wait for the result to arrive
+                // Wait for the result to arrive (and the sweet relief of no more unsafe job)
                 let &(ref lock, ref cvar) = &*pair;
                 let mut result = lock.lock().unwrap();
                 
