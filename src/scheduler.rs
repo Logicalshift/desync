@@ -539,7 +539,7 @@ impl Scheduler {
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
-    pub fn sync<'a, Result: 'a+Send, TFn: 'a+Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+    pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         enum RunAction {
             /// The queue is empty: call the function directly and don't bother with storing a result
             Immediate,
@@ -579,12 +579,15 @@ impl Scheduler {
 
                 // Queue a job that'll run the requested job and then set the result
                 let queue_result        = result.clone();
-                let result_job: Box<'a+ScheduledJob>   = Box::new(Job::new(move || {
+                let result_job          = Box::new(Job::new(move || {
                     let job_result = job();
                     *queue_result.lock().unwrap() = Some(job_result);
                 }));
-                let unsafe_result_job   = UnsafeJob::new(&*result_job);
 
+                // Stuff on the queue normally has a 'static lifetime. When we're running
+                // sync, the task will be done by the time this method is finished, so
+                // we use an unsafe job to bypass the normal lifetime checking
+                let unsafe_result_job   = UnsafeJob::new(&*result_job);
                 queue.core.lock().unwrap().queue.push_back(Box::new(unsafe_result_job));
 
                 // While there is no result, run a job from the queue
@@ -682,7 +685,7 @@ where TFn: 'static+Send+FnOnce() -> Item {
 ///
 /// Performs an action synchronously on the specified queue 
 ///
-pub fn sync<Result: 'static+Send, TFn: 'static+Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
+pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
     scheduler().sync(queue, job)
 }
 
