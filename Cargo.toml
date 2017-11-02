@@ -14,4 +14,4 @@ categories      = ["concurrency","asynchronous","algorithms","data-structures"]
 [dependencies]
 lazy_static     = "0.2"
 num_cpus        = "1.0"
-futures         = "0.1.16"
+futures         = "0.1.17"
