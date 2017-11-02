@@ -826,6 +826,21 @@ mod test {
     }
 
     #[test]
+    fn sync_has_synchronous_lifetime() {
+        timeout(|| {
+            let queue           = queue();
+            let mut some_val    = 0;
+
+            {
+                let some_val_ref = &mut some_val;
+                sync(&queue, move || *some_val_ref = 42);
+            }
+
+            assert!(some_val == 42);
+        }, 100);
+    }
+
+    #[test]
     fn can_reschedule_after_immediate_sync() {
         timeout(|| {
             let (tx, rx)    = channel();
