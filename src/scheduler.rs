@@ -208,7 +208,7 @@ impl Scheduler {
             let mut threads     = self.threads.lock().unwrap();
 
             while threads.len() > max_threads {
-                to_despawn.push(threads.pop().unwrap().thread);
+                to_despawn.push(threads.pop().unwrap().despawn());
             }
 
             to_despawn

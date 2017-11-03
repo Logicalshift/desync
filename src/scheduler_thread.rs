@@ -12,7 +12,7 @@ pub struct SchedulerThread {
     jobs: Sender<Box<ScheduledJob>>,
 
     /// The thread itself
-    pub thread: JoinHandle<()>,
+    thread: JoinHandle<()>,
 
     /// Flag that indicates that this thread is busy
     pub busy: Arc<Mutex<bool>>
@@ -43,5 +43,12 @@ impl SchedulerThread {
     ///
     pub fn run<Job: 'static+ScheduledJob>(&self, job: Job) {
         self.jobs.send(Box::new(job)).unwrap();
+    }
+
+    ///
+    /// De-spawns this thread and returns the join handle 
+    ///
+    pub fn despawn(self) -> JoinHandle<()> {
+        self.thread
     }
 }
