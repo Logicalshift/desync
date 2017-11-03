@@ -78,8 +78,8 @@ pub struct Scheduler {
     /// The queues that are active in the scheduler
     schedule: Arc<Mutex<VecDeque<Arc<JobQueue>>>>,
 
-    /// Active threads
-    threads: Mutex<Vec<SchedulerThread>>,
+    /// Active threads and whether or not they're busy
+    threads: Mutex<Vec<(Arc<Mutex<bool>>, SchedulerThread)>>,
 
     /// The maximum number of threads permitted in this scheduler
     max_threads: Mutex<usize>
@@ -208,7 +208,7 @@ impl Scheduler {
             let mut threads     = self.threads.lock().unwrap();
 
             while threads.len() > max_threads {
-                to_despawn.push(threads.pop().unwrap().despawn());
+                to_despawn.push(threads.pop().unwrap().1.despawn());
             }
 
             to_despawn
@@ -248,12 +248,12 @@ impl Scheduler {
         let threads = self.threads.lock().unwrap();
 
         // Find the first thread that is not marked as busy and schedule this task on it
-        for thread in threads.iter() {
-            let mut busy = thread.busy.lock().unwrap();
+        for &(ref busy_rc, ref thread) in threads.iter() {
+            let mut busy = busy_rc.lock().unwrap();
 
             if !*busy {
                 // Clone the busy mutex so we can return this thread to readiness
-                let also_busy = thread.busy.clone();
+                let also_busy =  busy_rc.clone();
 
                 // This thread is busy
                 *busy = true;
@@ -301,8 +301,9 @@ impl Scheduler {
 
         if threads.len() < max_threads {
             // Create a new thread
-            let new_thread = SchedulerThread::new();
-            threads.push(new_thread);
+            let is_busy     = Arc::new(Mutex::new(false));
+            let new_thread  = SchedulerThread::new();
+            threads.push((is_busy, new_thread));
             
             true
         } else {
@@ -367,8 +368,9 @@ impl Scheduler {
     /// Spawns a thread in this scheduler
     ///
     pub fn spawn_thread(&self) {
-        let new_thread = SchedulerThread::new();
-        self.threads.lock().unwrap().push(new_thread);
+        let is_busy     = Arc::new(Mutex::new(false));
+        let new_thread  = SchedulerThread::new();
+        self.threads.lock().unwrap().push((is_busy, new_thread));
     }
 
     ///

@@ -1,6 +1,5 @@
 use super::job::*;
 
-use std::sync::*;
 use std::thread::*;
 use std::sync::mpsc::*;
 
@@ -13,9 +12,6 @@ pub struct SchedulerThread {
 
     /// The thread itself
     thread: JoinHandle<()>,
-
-    /// Flag that indicates that this thread is busy
-    pub busy: Arc<Mutex<bool>>
 }
 
 impl SchedulerThread {
@@ -33,8 +29,7 @@ impl SchedulerThread {
 
         SchedulerThread {
             jobs:   jobs_in,
-            thread: thread,
-            busy:   Arc::new(Mutex::new(false))
+            thread: thread
         }
     }
 
