@@ -87,5 +87,6 @@ pub mod desync;
 
 mod job;
 mod unsafe_job;
+mod scheduler_thread;
 
 pub use desync::*;

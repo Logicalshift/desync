@@ -48,11 +48,10 @@
 
 use super::job::*;
 use super::unsafe_job::*;
+use super::scheduler_thread::*;
 
 use std::mem;
 use std::sync::*;
-use std::thread::*;
-use std::sync::mpsc::*;
 use std::collections::vec_deque::*;
 
 use num_cpus;
@@ -118,48 +117,6 @@ struct JobQueueCore {
 pub struct JobQueue {
     /// The shared data for this queue is stored within a mutex
     core: Mutex<JobQueueCore>
-}
-
-///
-/// A scheduler thread reads from the scheduler queue
-///
-struct SchedulerThread {
-    /// The jobs that this thread should run
-    jobs: Sender<Box<ScheduledJob>>,
-
-    /// The thread itself
-    thread: JoinHandle<()>,
-
-    /// Flag that indicates that this thread is busy
-    busy: Arc<Mutex<bool>>
-}
-
-impl SchedulerThread {
-    ///
-    /// Creates a new scheduler thread 
-    ///
-    fn new() -> SchedulerThread {
-        // All the thread does is run jobs from its channel
-        let (jobs_in, jobs_out): (Sender<Box<ScheduledJob>>, Receiver<Box<ScheduledJob>>) = channel();
-        let thread = spawn(move || {
-            while let Ok(mut job) = jobs_out.recv() {
-                job.run();
-            }
-        });
-
-        SchedulerThread {
-            jobs:   jobs_in,
-            thread: thread,
-            busy:   Arc::new(Mutex::new(false))
-        }
-    }
-
-    ///
-    /// Schedules a job to be run on this thread
-    ///
-    fn run<Job: 'static+ScheduledJob>(&self, job: Job) {
-        self.jobs.send(Box::new(job)).unwrap();
-    }
 }
 
 impl JobQueue {
@@ -627,6 +584,8 @@ pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, j
 mod test {
     use super::*;
     use std::time::*;
+    use std::thread::*;
+    use std::sync::mpsc::*;
 
     fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
         let (tx, rx)    = channel();
