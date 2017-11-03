@@ -85,4 +85,7 @@ extern crate futures;
 pub mod scheduler;
 pub mod desync;
 
+mod job;
+mod unsafe_job;
+
 pub use desync::*;

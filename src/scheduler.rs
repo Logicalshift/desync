@@ -46,6 +46,9 @@
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: a way to suspend and resume a queue would be a handy addition as it would let us 'pipe in' stuff from the futures library (and maybe do other things where other synchronisation is required)
 
+use super::job::*;
+use super::unsafe_job::*;
+
 use std::mem;
 use std::sync::*;
 use std::thread::*;
@@ -67,75 +70,6 @@ lazy_static! {
 ///
 fn initial_max_threads() -> usize {
     MIN_THREADS.max(num_cpus::get()*2)
-}
-
-///
-/// Trait implemented by things that can be scheduled as a job
-/// 
-trait ScheduledJob : Send {
-    /// Runs this particular job
-    fn run(&mut self);
-}
-
-///
-/// Basic job is just a FnOnce
-///
-struct Job<TFn> 
-where TFn: Send+FnOnce() -> () {
-    action: Option<TFn>
-}
-
-///
-/// The unsafe job does not manage the lifetime of its TFn
-///
-struct UnsafeJob {
-    // TODO: this can become Shared<> once that API stabilises
-    action: *const ScheduledJob
-}
-
-impl<TFn> Job<TFn> 
-where TFn: Send+FnOnce() -> () {
-    fn new(action: TFn) -> Job<TFn> {
-        Job { action: Some(action) }
-    }
-}
-
-impl<TFn> ScheduledJob for Job<TFn>
-where TFn: Send+FnOnce() -> () {
-    fn run(&mut self) {
-        // Consume the action when it's run
-        let mut action = None;
-        mem::swap(&mut action, &mut self.action);
-
-        if let Some(action) = action {
-            action();
-        } else {
-            panic!("Cannot schedule an action twice");
-        }
-    }
-}
-
-impl UnsafeJob {
-    ///
-    /// Creates an unsafe job. The referenced object should last as long as the job does
-    ///
-    fn new<'a>(action: &'a ScheduledJob) -> UnsafeJob {
-        let action_ptr: *const ScheduledJob = action;
-
-        // Transmute to remove the lifetime parameter :-/
-        // (We're safe provided this job is executed before the reference goes away)
-        unsafe { UnsafeJob { action: mem::transmute(action_ptr) } }
-    }
-}
-unsafe impl Send for UnsafeJob {}
-
-impl ScheduledJob for UnsafeJob {
-    fn run(&mut self) {
-        unsafe {
-            let action = self.action as *mut ScheduledJob;
-            (*action).run();
-        }
-    }
 }
 
 ///
