@@ -96,7 +96,10 @@ impl<T: 'static+Send> Desync<T> {
 
         self.async(|data| {
             let result = job(data);
-            send.send(result).ok();
+
+            if let Err(e) = send.send(result) {
+                panic!(e);
+            }
         });
 
         Box::new(receive)
