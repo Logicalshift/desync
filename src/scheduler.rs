@@ -606,13 +606,13 @@ pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, j
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
     use super::*;
     use std::time::*;
     use std::thread::*;
     use std::sync::mpsc::*;
 
-    fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
+    pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
         let (tx, rx)    = channel();
         let (tx1, tx2)  = (tx.clone(), tx.clone());
 

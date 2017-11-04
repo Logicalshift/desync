@@ -117,6 +117,7 @@ mod test {
     use super::*;
     use std::thread::*;
     use std::time::*;
+    use super::super::scheduler::test::timeout;
 
     struct TestData {
         val: u32
@@ -143,18 +144,20 @@ mod test {
 
     #[test]
     fn can_update_data_with_future() {
-        use futures::executor;
+        timeout(|| {
+            use futures::executor;
 
-        let desynced = Desync::new(TestData { val: 0 });
+            let desynced = Desync::new(TestData { val: 0 });
 
-        desynced.async(|data| {
-            sleep(Duration::from_millis(100));
-            data.val = 42;
-        });
+            desynced.async(|data| {
+                sleep(Duration::from_millis(100));
+                data.val = 42;
+            });
 
-        let mut future = executor::spawn(desynced.future(|data| data.val));
-        
-        assert!(future.wait_future().unwrap() == 42);
+            let mut future = executor::spawn(desynced.future(|data| data.val));
+            
+            assert!(future.wait_future().unwrap() == 42);
+        }, 500);
     }
 
     #[test]
