@@ -43,8 +43,9 @@
 //! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
+// TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
+// TODO: move tests into a separate file
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
-// TODO: a way to suspend and resume a queue would be a handy addition as it would let us 'pipe in' stuff from the futures library (and maybe do other things where other synchronisation is required)
 
 use super::job::*;
 use super::unsafe_job::*;
@@ -112,7 +113,10 @@ struct JobQueueCore {
     queue: VecDeque<Box<ScheduledJob>>,
 
     /// The current state of this queue
-    state: QueueState
+    state: QueueState,
+    
+    /// How many times this queue has been suspended (can be negative to indicate the suspension ended before it began)
+    suspension_count: i32
 }
 
 ///
@@ -138,8 +142,9 @@ impl JobQueue {
     fn new() -> JobQueue {
         JobQueue { 
             core: Mutex::new(JobQueueCore {
-                queue: VecDeque::new(),
-                state: QueueState::Idle
+                queue:              VecDeque::new(),
+                state:              QueueState::Idle,
+                suspension_count:   0
             })
         }
     }
@@ -455,8 +460,40 @@ impl Scheduler {
 
         self.async(queue, move || {
             // Mark the queue as suspended
-            to_suspend.core.lock().unwrap().state = QueueState::Suspended;
+            let mut core = to_suspend.core.lock().unwrap();
+
+            // Only actually suspend the core if it hasn't already been resumed elsewhere
+            core.suspension_count += 1;
+            if core.suspension_count > 0 {
+                core.state = QueueState::Suspended;
+            }
         });
+    }
+
+    ///
+    /// Resumes a queue that was previously suspended
+    ///
+    pub fn resume(&self, queue: &Arc<JobQueue>) {
+        // Reduce the amount of suspension used by a queue
+        // TODO: this is currently fairly unsafe as we can call resume extra times or not at all
+        // TODO: better might be to return a token from suspend that we can use to resume the queue (problem is: rescheduling in the right place)
+        let needs_reschedule = {
+            let mut core = queue.core.lock().unwrap();
+
+            // Queue becomes less suspended
+            core.suspension_count -= 1;
+            if core.suspension_count <= 0 && core.state == QueueState::Suspended {
+                // If the queue was suspended and should no longer be, return it to the idle state
+                core.state = QueueState::Idle;
+                true
+            } else {
+                false
+            }
+        };
+
+        if needs_reschedule {
+            self.reschedule_queue(queue);
+        }
     }
 
     ///
@@ -872,6 +909,75 @@ pub mod test {
             }));
 
             assert!(future.wait_future().unwrap() == 42);
+        }, 500);
+    }
+
+    #[test]
+    fn can_suspend_queue() {
+        timeout(|| {
+            let queue       = queue();
+            let scheduler   = scheduler();
+
+            let pos         = Arc::new(Mutex::new(0));
+
+            // Increment the position, suspend the queue, increment it again
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+            scheduler.suspend(&queue);
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+
+            // Wait for long enough for these events to take place and check the queue
+            sleep(Duration::from_millis(10));
+            assert!(*pos.lock().unwrap() == 1);
+
+            // Resume the queue and check that the next phase runs
+            scheduler.resume(&queue);
+            sleep(Duration::from_millis(10));
+            assert!(*pos.lock().unwrap() == 2);
+        }, 500);
+    }
+
+    #[test]
+    fn can_resume_before_suspend() {
+        timeout(|| {
+            let queue       = queue();
+            let scheduler   = scheduler();
+
+            let pos         = Arc::new(Mutex::new(0));
+
+            // Increment the position, suspend the queue, increment it again
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+            scheduler.resume(&queue);
+            scheduler.suspend(&queue);
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+
+            // Wait for long enough for these events to take place and check the queue
+            sleep(Duration::from_millis(10));
+            assert!(*pos.lock().unwrap() == 2);
+        }, 500);
+    }
+
+    #[test]
+    fn safe_to_drop_suspended_queue() {
+        timeout(|| {
+            let queue       = queue();
+            let scheduler   = scheduler();
+
+            let pos         = Arc::new(Mutex::new(0));
+
+            // Increment the position, suspend the queue, increment it again
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+            scheduler.suspend(&queue);
+            let pos2        = pos.clone();
+            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+
+            // Wait for long enough for these events to take place and check the queue
+            sleep(Duration::from_millis(10));
+            assert!(*pos.lock().unwrap() == 1);
         }, 500);
     }
 }
