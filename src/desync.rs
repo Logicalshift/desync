@@ -195,13 +195,15 @@ mod test {
                 let desynced = Desync::new(TestData { val: 0 });
 
                 desynced.async(|data| {
-                    sleep(Duration::from_millis(1));
                     data.val = 42;
+                });
+                desynced.async(|data| {
+                    data.val = 43;
                 });
 
                 let mut future = executor::spawn(desynced.future(|data| data.val));
                 
-                assert!(future.wait_future().unwrap() == 42);
+                assert!(future.wait_future().unwrap() == 43);
             }, 500);
         }
     }
