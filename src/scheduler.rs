@@ -928,13 +928,16 @@ pub mod test {
             async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
             // Wait for long enough for these events to take place and check the queue
-            sleep(Duration::from_millis(10));
+            while *pos.lock().unwrap() == 0 {
+                sleep(Duration::from_millis(100));
+            }
             assert!(*pos.lock().unwrap() == 1);
 
             // Resume the queue and check that the next phase runs
             scheduler.resume(&queue);
             sleep(Duration::from_millis(10));
             assert!(*pos.lock().unwrap() == 2);
+            assert!(sync(&queue, || 42) == 42);
         }, 500);
     }
 
@@ -955,7 +958,9 @@ pub mod test {
             async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
             // Wait for long enough for these events to take place and check the queue
-            sleep(Duration::from_millis(10));
+            while *pos.lock().unwrap() == 0 {
+                sleep(Duration::from_millis(100));
+            }
             assert!(*pos.lock().unwrap() == 2);
         }, 500);
     }
@@ -976,7 +981,9 @@ pub mod test {
             async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
             // Wait for long enough for these events to take place and check the queue
-            sleep(Duration::from_millis(10));
+            while *pos.lock().unwrap() == 0 {
+                sleep(Duration::from_millis(100));
+            }
             assert!(*pos.lock().unwrap() == 1);
         }, 500);
     }
