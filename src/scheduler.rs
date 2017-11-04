@@ -51,6 +51,7 @@ use super::unsafe_job::*;
 use super::scheduler_thread::*;
 
 use std::mem;
+use std::fmt;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
@@ -88,7 +89,7 @@ pub struct Scheduler {
 ///
 /// Represents the state of a job queue
 ///
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 enum QueueState {
     /// Queue is currently not running and not ready to run
     Idle,
@@ -120,6 +121,14 @@ struct JobQueueCore {
 pub struct JobQueue {
     /// The shared data for this queue is stored within a mutex
     core: Mutex<JobQueueCore>
+}
+
+impl fmt::Debug for JobQueue {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        let core = self.core.lock().unwrap();
+
+        fmt.write_str(&format!("JobQueue: State: {:?}, Pending: {}", core.state, core.queue.len()))
+    }
 }
 
 impl JobQueue {
@@ -569,6 +578,21 @@ impl Scheduler {
     }
 }
 
+
+impl fmt::Debug for Scheduler {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
+        let threads = {
+            let threads     = self.threads.lock().unwrap();
+            let busyness:String    = threads.iter().map(|&(ref busy, _)| { if *busy.lock().unwrap() { 'B' } else { 'I' } }).collect();
+
+            busyness
+        };
+        let queue_size = format!("Pending queue count: {}", self.schedule.lock().unwrap().len());
+
+        fmt.write_str(&format!("{} {}", threads, queue_size))
+    }
+}
+
 ///
 /// Retrieves the global scheduler
 ///
@@ -627,6 +651,7 @@ pub mod test {
         });
 
         if rx.recv().unwrap() == false {
+            println!("{:?}", scheduler());
             panic!("Timeout");
         }
     }
