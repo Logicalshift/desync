@@ -7,6 +7,7 @@ use futures::future::Future;
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
 ///
+#[derive(Debug)]
 pub struct Desync<T: Send> {
     /// Queue used for scheduling runtime for this object
     queue:  Arc<JobQueue>,
@@ -122,6 +123,7 @@ mod test {
     use std::time::*;
     use super::super::scheduler::test::timeout;
 
+    #[derive(Debug)]
     struct TestData {
         val: u32
     }
