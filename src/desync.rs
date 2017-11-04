@@ -152,11 +152,13 @@ mod test {
                 let desynced = Desync::new(TestData { val: 0 });
 
                 desynced.async(|data| {
-                    sleep(Duration::from_millis(1));
                     data.val = 42;
                 });
+                desynced.async(|data| {
+                    data.val = 43;
+                });
                 
-                assert!(desynced.sync(|data| data.val) == 42);
+                assert!(desynced.sync(|data| data.val) == 43);
             }, 500);
         }
     }
