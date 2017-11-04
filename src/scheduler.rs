@@ -558,8 +558,15 @@ impl Scheduler {
                 }));
                 
                 // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
-                let unsafe_job = Box::new(UnsafeJob::new(&*job));
-                queue.core.lock().unwrap().queue.push_back(unsafe_job);
+                let need_reschedule = {
+                    // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
+                    let unsafe_job  = Box::new(UnsafeJob::new(&*job));
+                    let mut core    = queue.core.lock().unwrap();
+
+                    core.queue.push_back(unsafe_job);
+                    core.state == QueueState::Idle
+                };
+                if need_reschedule { self.reschedule_queue(queue); }
 
                 // Wait for the result to arrive (and the sweet relief of no more unsafe job)
                 let &(ref lock, ref cvar) = &*pair;
