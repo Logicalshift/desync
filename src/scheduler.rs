@@ -97,7 +97,10 @@ enum QueueState {
     Pending,
 
     /// Queue has been assigned to a thread and is currently running
-    Running
+    Running,
+
+    /// Queue has been suspended and won't run futher jobs
+    Suspended
 }
 
 ///
@@ -137,7 +140,14 @@ impl JobQueue {
     ///
     fn dequeue(&self) -> Option<Box<ScheduledJob>> {
         let mut core = self.core.lock().unwrap();
-        core.queue.pop_front()
+
+        if core.state == QueueState::Suspended {
+            // Stop dequeuing if the queue is suspended
+            None
+        } else {
+            // Treat queue as running in all other states
+            core.queue.pop_front()
+        }
     }
 
     ///
@@ -429,6 +439,18 @@ impl Scheduler {
     }
 
     ///
+    /// Requests that a queue be suspended once it has finished all of its active jobs
+    ///
+    pub fn suspend(&self, queue: &Arc<JobQueue>) {
+        let to_suspend = queue.clone();
+
+        self.async(queue, move || {
+            // Mark the queue as suspended
+            to_suspend.core.lock().unwrap().state = QueueState::Suspended;
+        });
+    }
+
+    ///
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
@@ -449,9 +471,10 @@ impl Scheduler {
             let mut core = queue.core.lock().unwrap();
 
             match core.state {
-                QueueState::Running => RunAction::WaitForBackground,
-                QueueState::Pending => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
-                QueueState::Idle    => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Suspended   => RunAction::WaitForBackground,
+                QueueState::Running     => RunAction::WaitForBackground,
+                QueueState::Pending     => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
+                QueueState::Idle        => { core.state = QueueState::Running; RunAction::Immediate }
             }
         };
 
