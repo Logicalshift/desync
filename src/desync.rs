@@ -143,6 +143,22 @@ mod test {
     }
 
     #[test]
+    fn can_update_data_asynchronously_1000_times() {
+        for _i in 0..1000 {
+            timeout(|| {
+                let desynced = Desync::new(TestData { val: 0 });
+
+                desynced.async(|data| {
+                    sleep(Duration::from_millis(1));
+                    data.val = 42;
+                });
+                
+                assert!(desynced.sync(|data| data.val) == 42);
+            }, 500);
+        }
+    }
+
+    #[test]
     fn can_update_data_with_future() {
         timeout(|| {
             use futures::executor;
@@ -154,10 +170,33 @@ mod test {
                 data.val = 42;
             });
 
-            let mut future = executor::spawn(desynced.future(|data| data.val));
+            let mut future = executor::spawn(desynced.future(|data| {
+                data.val
+            }));
             
             assert!(future.wait_future().unwrap() == 42);
         }, 500);
+    }
+
+    #[test]
+    fn can_update_data_with_future_1000_times() {
+        // Seems to timeout fairly reliably after signalling the future
+        use futures::executor;
+
+        for _i in 0..1000 {
+            timeout(|| {
+                let desynced = Desync::new(TestData { val: 0 });
+
+                desynced.async(|data| {
+                    sleep(Duration::from_millis(1));
+                    data.val = 42;
+                });
+
+                let mut future = executor::spawn(desynced.future(|data| data.val));
+                
+                assert!(future.wait_future().unwrap() == 42);
+            }, 500);
+        }
     }
 
     #[test]
