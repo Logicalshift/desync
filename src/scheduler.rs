@@ -45,6 +45,7 @@
 
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
 // TODO: move tests into a separate file
+// TODO: test suspension when in 'drain on this thread' mode for sync() calls
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 
 use super::job::*;
