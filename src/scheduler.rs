@@ -565,10 +565,27 @@ impl Scheduler {
         // While there is no result, run a job from the queue
         while result.lock().expect("Sync queue result lock").is_none() {
             if let Some(mut job) = queue.dequeue() {
+                // Queue is running
                 debug_assert!(queue.core.lock().unwrap().state != QueueState::Suspended);
                 job.run();
             } else {
-                panic!("Queue drained before synchronous job could execute");
+                // Queue may have suspended (or gone to suspending and back to running)
+                let wait_in_background = {
+                    let mut core = queue.core.lock().expect("JobQueue core lock");
+                    if core.state == QueueState::Suspending {
+                        // Finish suspension, then wait for job to complete
+                        core.state = QueueState::Suspended;
+                        true
+                    } else {
+                        // Queue is still running
+                        debug_assert!(core.state == QueueState::Running);
+                        false
+                    }
+                };
+
+                if wait_in_background {
+                    panic!("Don't know how to wait in backgorund :-(");
+                }
             }
         }
 
@@ -1106,6 +1123,9 @@ pub mod test {
             thread::spawn(move || {
                 thread::sleep(Duration::from_millis(100));
                 resume_scheduler.resume(&to_resume);
+
+                // The scheduler will need to be able to finish the task on a thread
+                resume_scheduler.set_max_threads(1);
             });
 
             // Should be able to retrieve a value once the queue resumes
