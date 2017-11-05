@@ -45,8 +45,6 @@
 
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
 // TODO: move tests into a separate file
-// TODO: test suspension when in 'drain on this thread' mode for sync() calls
-// TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: handle panicking threads better
 
 use super::job::*;
@@ -59,8 +57,9 @@ use std::sync::*;
 use std::collections::vec_deque::*;
 
 use num_cpus;
-use futures::future::Future;
+use futures::future;
 use futures::sync::oneshot;
+use futures::future::Future;
 
 const MIN_THREADS: usize = 8;
 
@@ -463,6 +462,26 @@ impl Scheduler {
         });
 
         Box::new(receive)
+    }
+
+    ///
+    /// Pauses a queue until a particular future has completed, before performing a
+    /// task with the result of that future
+    ///
+    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> Box<'a+Future<Item=Res, Error=Error>> 
+    where TFn: 'static+Send+FnOnce(Result<Item, Error>) -> Result<Res, Error> {
+        // Suspend the queue
+        self.suspend(queue);
+
+        // Resume it after the future completes
+        let future_queue    = queue.clone();
+        let next_future     = after.then(move |val| {
+            // TODO: we always re-queue on the main scheduler here
+            future(&future_queue, move || { job(val) })
+                .then(|val| future::result(val.unwrap()))
+        });
+
+        Box::new(next_future)
     }
 
     ///
@@ -1063,6 +1082,39 @@ pub mod test {
             }));
 
             assert!(future.wait_future().unwrap() == 42);
+        }, 500);
+    }
+
+    #[test]
+    fn can_wait_for_future() {
+        timeout(|| {
+            use futures::executor;
+            let (tx, rx)                = channel();
+            let (future_tx, future_rx)  = oneshot::channel();
+            
+            let scheduler   = scheduler();
+            let queue       = queue();
+
+            let tx2 = tx.clone();
+            async(&queue, move || { tx2.send(1).unwrap(); });
+
+            let tx2 = tx.clone();
+            let future = scheduler.after(&queue, future_rx, 
+                move |val| val.map(move |val| { tx2.send(val).unwrap(); 4 }));
+
+            let tx2 = tx.clone();
+            async(&queue, move || { tx2.send(3).unwrap(); });
+
+            assert!(rx.recv().unwrap() == 1);
+            assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+            future_tx.send(2).unwrap();
+            let mut future  = executor::spawn(future);
+
+            assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
+            assert!(rx.recv().unwrap() == 3);
+
+            assert!(future.wait_future().unwrap() == 4);
         }, 500);
     }
 
