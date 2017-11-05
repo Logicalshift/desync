@@ -185,8 +185,11 @@ impl JobQueue {
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
-                    core.state  = QueueState::Idle;
-                    done        = true;
+                    if core.state != QueueState::Suspended {
+                        // If the very last action was to suspend the queue, then it remains suspended
+                        core.state = QueueState::Idle;
+                    }
+                    done = true;
                 }
             }
         }
