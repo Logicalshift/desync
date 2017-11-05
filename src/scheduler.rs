@@ -543,6 +543,7 @@ impl Scheduler {
         // While there is no result, run a job from the queue
         while result.lock().expect("Sync queue result lock").is_none() {
             if let Some(mut job) = queue.dequeue() {
+                debug_assert!(queue.core.lock().unwrap().state != QueueState::Suspended);
                 job.run();
             } else {
                 panic!("Queue drained before synchronous job could execute");
