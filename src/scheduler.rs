@@ -651,7 +651,6 @@ impl Scheduler {
     }
 }
 
-
 impl fmt::Debug for Scheduler {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let threads = {
