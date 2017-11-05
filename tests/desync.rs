@@ -107,3 +107,48 @@ fn dropping_while_running_isnt_obviously_bad() {
         data.val = 42;
     });
 }
+
+#[test]
+fn can_wait_for_future() {
+    // TODO: occasional test failure that happens if the future 'arrives' before the queue is empty
+    // (Because we need a future that arrives when the queue is actually suspended)
+    timeout(|| {
+        use futures::executor;
+        use futures::sync::oneshot;
+
+        // We use a oneshot as our future, and a mpsc channel to track progress
+        let desynced = Desync::new(0);
+        let (future_tx, future_rx)  = oneshot::channel();
+
+        // First value 0 -> 1
+        desynced.async(|val| { 
+            sleep(Duration::from_millis(100));
+            println!("1");
+            assert!(*val == 0);
+            *val = 1; 
+        });
+
+        // Future should go 1 -> 2, but takes whatever future_tx sends
+        let future = desynced.after(future_rx, |val, future_result| {
+            println!("2");
+            assert!(*val == 1);
+            *val = future_result.unwrap();
+
+            // Return '4' to anything listening for this future
+            Ok(4)
+        });
+
+        // Finally, 3
+        desynced.async(move |val| { assert!(*val == 2); *val = 3 });
+
+        // Send '2' to the future
+        future_tx.send(2).unwrap();
+        let mut future  = executor::spawn(future);
+
+        // Future should resolve to 4
+        assert!(future.wait_future().unwrap() == 4);
+
+        // Final value should be 3
+        assert!(desynced.sync(|val| *val) == 3);
+    }, 500);
+}

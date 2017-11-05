@@ -88,7 +88,8 @@ impl<T: 'static+Send> Desync<T> {
     }
 
     ///
-    /// Performs an operation asynchronously on this thread, returning the result via a future.
+    /// Performs an operation asynchronously on the contents of this item, returning the 
+    /// result via a future.
     ///
     pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<Future<Item=Item, Error=oneshot::Canceled>>
     where TFn: 'static+Send+FnOnce(&mut T) -> Item {
@@ -103,6 +104,24 @@ impl<T: 'static+Send> Desync<T> {
         });
 
         Box::new(receive)
+    }
+
+    ///
+    /// After the pending operations for this item are performed, waits for the
+    /// supplied future to complete and then calls the specified function
+    ///
+    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, after: Fut, job: TFn) -> Box<'a+Future<Item=Res, Error=Error>> 
+    where TFn: 'static+Send+FnOnce(&mut T, Result<Item, Error>) -> Result<Res, Error> {
+        unsafe {
+            // As drop() is the last thing called, we know that this object will still exist at the point where
+            // Also, we'll have exclusive access to this object when the callback occurs
+            let data = DataRef(&*self.data);
+
+            scheduler().after(&self.queue, after, move |future_result| {
+                let data = data.0 as *mut T;
+                job(&mut *data, future_result)
+            })
+        }
     }
 }
 
