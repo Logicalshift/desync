@@ -1134,26 +1134,24 @@ pub mod test {
 
     #[test]
     fn can_resume_before_suspend() {
-        timeout(|| {
-            let queue       = queue();
-            let scheduler   = scheduler();
+        for _x in 0..1000 {
+            timeout(|| {
+                let (tx, rx)    = channel();
+                let queue       = queue();
+                let scheduler   = scheduler();
 
-            let pos         = Arc::new(Mutex::new(0));
+                // Increment the position, suspend the queue, increment it again
+                let tx2         = tx.clone();
+                async(&queue, move || { tx2.send(1).unwrap(); });
+                scheduler.resume(&queue);
+                scheduler.suspend(&queue);
+                let tx2         = tx.clone();
+                async(&queue, move || { tx2.send(2).unwrap(); });
 
-            // Increment the position, suspend the queue, increment it again
-            let pos2        = pos.clone();
-            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
-            scheduler.resume(&queue);
-            scheduler.suspend(&queue);
-            let pos2        = pos.clone();
-            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
-
-            // Wait for long enough for these events to take place and check the queue
-            while *pos.lock().unwrap() == 0 {
-                thread::sleep(Duration::from_millis(100));
-            }
-            assert!(*pos.lock().unwrap() == 2);
-        }, 500);
+                assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(1));
+                assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(2));
+            }, 500);
+        }
     }
 
     #[test]
