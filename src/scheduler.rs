@@ -737,9 +737,9 @@ pub mod test {
         thread::Builder::new()
             .name("timeout thread".to_string())
             .spawn(move || {
-            thread::sleep(Duration::from_millis(millis));
-            tx2.send(ThreadState::Timeout).ok();
-        }).expect("Create timeout timer thread");
+                thread::sleep(Duration::from_millis(millis));
+                tx2.send(ThreadState::Timeout).ok();
+            }).expect("Create timeout timer thread");
 
         match rx.recv().expect("Receive timeout status") {
             ThreadState::Ok => (),
