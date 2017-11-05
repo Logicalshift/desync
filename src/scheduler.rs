@@ -734,15 +734,22 @@ pub mod test {
             })
             .expect("Create timeout run thread");
 
-        thread::Builder::new()
+        let (timer_done, timer_done_recv) = channel();
+        let timer = thread::Builder::new()
             .name("timeout thread".to_string())
             .spawn(move || {
-                thread::sleep(Duration::from_millis(millis));
-                tx2.send(ThreadState::Timeout).ok();
+                let done = timer_done_recv.recv_timeout(Duration::from_millis(millis));
+                if done.is_err() {
+                    tx2.send(ThreadState::Timeout).ok();
+                }
             }).expect("Create timeout timer thread");
 
         match rx.recv().expect("Receive timeout status") {
-            ThreadState::Ok => (),
+            ThreadState::Ok => {
+                // Stop the timer thread
+                timer_done.send(()).expect("Stop timer");
+                timer.join().expect("Wait for timer to stop");
+            },
             ThreadState::Timeout => {
                 println!("{:?}", scheduler());
                 panic!("Timeout");
