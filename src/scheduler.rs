@@ -1070,41 +1070,34 @@ pub mod test {
             timeout(|| {
                 let queue           = queue();
                 let scheduler       = scheduler();
+                let (tx, rx)        = channel();
 
                 let pos             = Arc::new(Mutex::new(0));
-                let after_suspend   = Arc::new(Mutex::new(0));
 
-                // Increment the position, suspend the queue, increment it again
-                // TODO: looks like the first increment is running twice?
+                // Send the current position when the async methods run
                 let pos2 = pos.clone();
-                async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+                let tx2 = tx.clone();
+                async(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
+
+                // Suspend after the first send
                 scheduler.suspend(&queue);
 
-                let after_suspend2 = after_suspend.clone();
-                async(&queue, move || { let mut after_suspend2 = after_suspend2.lock().unwrap(); *after_suspend2 += 1 });
+                // Send agin
+                let pos2 = pos.clone();
+                let tx2 = tx.clone();
+                async(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
-                // Wait for long enough for these events to take place and check the queue
-                while *pos.lock().unwrap() == 0 {
-                    thread::sleep(Duration::from_millis(1));
-                }
-                let result = *pos.lock().unwrap();
-                if result != 1 { println!("Actual result: {}", result); }
-                assert!(result == 1);
+                // Wait for the first queue to send
+                assert!(rx.recv().unwrap() == 0);
 
-                let suspend_res = *after_suspend.lock().unwrap();
-                if suspend_res != 0 { println!("Failed to suspend: {}", suspend_res); }
-                assert!(suspend_res == 0);
+                thread::yield_now();
 
-                // Resume the queue and check that the next phase runs
+                // Update the position and resume
+                *pos.lock().unwrap() = 1;
                 scheduler.resume(&queue);
-                while *after_suspend.lock().unwrap() == 0 {
-                    thread::sleep(Duration::from_millis(1));
-                }
-                let suspend_res = *after_suspend.lock().unwrap();
-                if suspend_res != 1 { println!("After suspend: {}", suspend_res); }
-                assert!(suspend_res == 1);
-                assert!(*pos.lock().unwrap() == 1);
-                assert!(sync(&queue, || 42) == 42);
+
+                // The resumption will send us a value when it occurs
+                assert!(rx.recv().unwrap() == 1);
             }, 500);
         }
     }
