@@ -131,7 +131,7 @@ pub struct JobQueue {
 
 impl fmt::Debug for JobQueue {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let core = self.core.lock().unwrap();
+        let core = self.core.lock().expect("JobQueue core lock");
 
         fmt.write_str(&format!("JobQueue: State: {:?}, Pending: {}", core.state, core.queue.len()))
     }
@@ -155,7 +155,7 @@ impl JobQueue {
     /// If there are any jobs waiting, dequeues the next one
     ///
     fn dequeue(&self) -> Option<Box<ScheduledJob>> {
-        let mut core = self.core.lock().unwrap();
+        let mut core = self.core.lock().expect("JobQueue core lock");
 
         if core.state == QueueState::Suspended {
             // Stop dequeuing if the queue is suspended
@@ -180,7 +180,7 @@ impl JobQueue {
 
             // Try to move back to the 'not running' state
             {
-                let mut core = self.core.lock().unwrap();
+                let mut core = self.core.lock().expect("JobQueue core lock");
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
@@ -214,7 +214,7 @@ impl Scheduler {
     ///
     pub fn set_max_threads(&self, max_threads: usize) {
         // Update the maximum number of threads we can spawn
-        { *self.max_threads.lock().unwrap() = max_threads };
+        { *self.max_threads.lock().expect("Max threads lock") = max_threads };
 
         // Try to schedule a thread if we can
         self.schedule_thread();
@@ -226,15 +226,15 @@ impl Scheduler {
     /// Must not be called from a scheduler thread (as it waits for the threads to despawn)
     ///
     pub fn despawn_threads_if_overloaded(&self) {
-        let max_threads = { *self.max_threads.lock().unwrap() };
+        let max_threads = { *self.max_threads.lock().expect("Max threads lock") };
         let to_despawn  = {
             // Transfer the threads from the threads vector to our _to_despawn variable
             // This is then dropped outside the mutex (so we don't block if one of the threads doesn't stop)
             let mut to_despawn  = vec![];
-            let mut threads     = self.threads.lock().unwrap();
+            let mut threads     = self.threads.lock().expect("Scheduler threads lock");
 
             while threads.len() > max_threads {
-                to_despawn.push(threads.pop().unwrap().1.despawn());
+                to_despawn.push(threads.pop().expect("Missing threads").1.despawn());
             }
 
             to_despawn
@@ -250,11 +250,11 @@ impl Scheduler {
     /// 
     fn next_to_run(schedule: &Arc<Mutex<VecDeque<Arc<JobQueue>>>>) -> Option<Arc<JobQueue>> {
         // Search the queues...
-        let mut schedule = schedule.lock().unwrap();
+        let mut schedule = schedule.lock().expect("Schedule lock");
 
         // Find a queue where the state is pending
         while let Some(q) = schedule.pop_front() {
-            let mut core = q.core.lock().unwrap();
+            let mut core = q.core.lock().expect("JobQueue core lock");
 
             if core.state == QueueState::Pending {
                 // Queue is ready to run. Mark it as running and return it
@@ -271,11 +271,11 @@ impl Scheduler {
     ///
     fn schedule_dormant<NextJob, RunJob, JobData>(&self, next_job: NextJob, job: RunJob) -> bool
     where RunJob: 'static+Send+Fn(JobData) -> (), NextJob: 'static+Send+Fn() -> Option<JobData> {
-        let threads = self.threads.lock().unwrap();
+        let threads = self.threads.lock().expect("Scheduler threads lock");
 
         // Find the first thread that is not marked as busy and schedule this task on it
         for &(ref busy_rc, ref thread) in threads.iter() {
-            let mut busy = busy_rc.lock().unwrap();
+            let mut busy = busy_rc.lock().expect("Thread busy lock");
 
             if !*busy {
                 // Clone the busy mutex so we can return this thread to readiness
@@ -290,7 +290,7 @@ impl Scheduler {
                         // Obtain the next job. The thread is not busy once there are no longer any jobs
                         // We hold the mutex while this is going on to avoid a race condition when a thread is going dormant
                         let job_data = {
-                            let mut busy = also_busy.lock().unwrap();
+                            let mut busy = also_busy.lock().expect("Thread busy lock");
                             let job_data = next_job();
 
                             // If there's no next job, then this thread is no longer busy
@@ -322,8 +322,8 @@ impl Scheduler {
     /// If we're running fewer than the maximum number of threads, try to spawn a new one
     ///
     fn spawn_thread_if_less_than_maximum(&self) -> bool {
-        let max_threads = { *self.max_threads.lock().unwrap() };
-        let mut threads = self.threads.lock().unwrap();
+        let max_threads = { *self.max_threads.lock().expect("Max threads lock") };
+        let mut threads = self.threads.lock().expect("Scheduler threads lock");
 
         if threads.len() < max_threads {
             // Create a new thread
@@ -366,7 +366,7 @@ impl Scheduler {
     ///
     fn reschedule_queue(&self, queue: &Arc<JobQueue>) {
         let reschedule = {
-            let mut core = queue.core.lock().unwrap();
+            let mut core = queue.core.lock().expect("JobQueue core lock");
 
             if core.state != QueueState::Pending {
                 // Schedule a thread to restart the queue if more things were queued
@@ -385,7 +385,7 @@ impl Scheduler {
         };
 
         if reschedule {
-            self.schedule.lock().unwrap().push_back(queue.clone());
+            self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
             self.schedule_thread();
         }
     }
@@ -396,7 +396,7 @@ impl Scheduler {
     pub fn spawn_thread(&self) {
         let is_busy     = Arc::new(Mutex::new(false));
         let new_thread  = SchedulerThread::new();
-        self.threads.lock().unwrap().push((is_busy, new_thread));
+        self.threads.lock().expect("Scheduler threads lock").push((is_busy, new_thread));
     }
 
     ///
@@ -414,7 +414,7 @@ impl Scheduler {
     pub fn async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
         let schedule_queue = {
             let job         = Job::new(job);
-            let mut core    = queue.core.lock().unwrap();
+            let mut core    = queue.core.lock().expect("JobQueue core lock");
 
             // Push the job onto the queue
             core.queue.push_back(Box::new(job));
@@ -432,7 +432,7 @@ impl Scheduler {
         // If when we were queuing the jobs we found that the queue was idle, then move it to the pending list
         if schedule_queue {
             // Add the queue to the schedule
-            self.schedule.lock().unwrap().push_back(queue.clone());
+            self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
 
             // Wake up a thread to run it if we can
             self.schedule_thread();
@@ -462,7 +462,7 @@ impl Scheduler {
 
         self.async(queue, move || {
             // Mark the queue as suspended
-            let mut core = to_suspend.core.lock().unwrap();
+            let mut core = to_suspend.core.lock().expect("JobQueue core lock");
 
             // Only actually suspend the core if it hasn't already been resumed elsewhere
             core.suspension_count += 1;
@@ -480,7 +480,7 @@ impl Scheduler {
         // TODO: this is currently fairly unsafe as we can call resume extra times or not at all
         // TODO: better might be to return a token from suspend that we can use to resume the queue (problem is: rescheduling in the right place)
         let needs_reschedule = {
-            let mut core = queue.core.lock().unwrap();
+            let mut core = queue.core.lock().expect("JobQueue core lock");
 
             // Queue becomes less suspended
             core.suspension_count -= 1;
@@ -516,7 +516,7 @@ impl Scheduler {
 
         // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
         let run_action = {
-            let mut core = queue.core.lock().unwrap();
+            let mut core = queue.core.lock().expect("JobQueue core lock");
 
             match core.state {
                 QueueState::Suspended   => RunAction::WaitForBackground,
@@ -545,17 +545,17 @@ impl Scheduler {
                 let queue_result        = result.clone();
                 let result_job          = Box::new(Job::new(move || {
                     let job_result = job();
-                    *queue_result.lock().unwrap() = Some(job_result);
+                    *queue_result.lock().expect("Sync queue result lock") = Some(job_result);
                 }));
 
                 // Stuff on the queue normally has a 'static lifetime. When we're running
                 // sync, the task will be done by the time this method is finished, so
                 // we use an unsafe job to bypass the normal lifetime checking
                 let unsafe_result_job   = UnsafeJob::new(&*result_job);
-                queue.core.lock().unwrap().queue.push_back(Box::new(unsafe_result_job));
+                queue.core.lock().expect("JobQueue core lock").queue.push_back(Box::new(unsafe_result_job));
 
                 // While there is no result, run a job from the queue
-                while result.lock().unwrap().is_none() {
+                while result.lock().expect("Sync queue result lock").is_none() {
                     if let Some(mut job) = queue.dequeue() {
                         job.run();
                     } else {
@@ -572,11 +572,11 @@ impl Scheduler {
 
                 // Get the final result by swapping it out of the mutex
                 let mut final_result    = None;
-                let mut old_result      = result.lock().unwrap();
+                let mut old_result      = result.lock().expect("Sync queue result lock");
 
                 mem::swap(&mut *old_result, &mut final_result);
 
-                final_result.unwrap()
+                final_result.expect("Finished sync request without result")
             },
         
             RunAction::WaitForBackground => {
@@ -592,7 +592,7 @@ impl Scheduler {
                     let actual_result = job();
 
                     // Set the result and notify the waiting thread
-                    *result.lock().unwrap() = Some(actual_result);
+                    *result.lock().expect("Background job result lock") = Some(actual_result);
                     cvar.notify_one();
                 }));
                 
@@ -600,7 +600,7 @@ impl Scheduler {
                 let need_reschedule = {
                     // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
                     let unsafe_job  = Box::new(UnsafeJob::new(&*job));
-                    let mut core    = queue.core.lock().unwrap();
+                    let mut core    = queue.core.lock().expect("JobQueue core lock");
 
                     core.queue.push_back(unsafe_job);
                     core.state == QueueState::Idle
@@ -609,16 +609,16 @@ impl Scheduler {
 
                 // Wait for the result to arrive (and the sweet relief of no more unsafe job)
                 let &(ref lock, ref cvar) = &*pair;
-                let mut result = lock.lock().unwrap();
+                let mut result = lock.lock().expect("Background job result lock");
                 
                 while result.is_none() {
-                    result = cvar.wait(result).unwrap();
+                    result = cvar.wait(result).expect("Background job cvar wait");
                 }
 
                 // Get the final result by swapping it out of the mutex
                 let mut final_result    = None;
                 mem::swap(&mut *result, &mut final_result);
-                final_result.unwrap()
+                final_result.expect("Finished background sync job without result")
             }
         }
     }
@@ -628,12 +628,12 @@ impl Scheduler {
 impl fmt::Debug for Scheduler {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let threads = {
-            let threads     = self.threads.lock().unwrap();
-            let busyness:String    = threads.iter().map(|&(ref busy, _)| { if *busy.lock().unwrap() { 'B' } else { 'I' } }).collect();
+            let threads         = self.threads.lock().expect("Scheduler threads lock");
+            let busyness:String = threads.iter().map(|&(ref busy, _)| { if *busy.lock().expect("Thread busy lock") { 'B' } else { 'I' } }).collect();
 
             busyness
         };
-        let queue_size = format!("Pending queue count: {}", self.schedule.lock().unwrap().len());
+        let queue_size = format!("Pending queue count: {}", self.schedule.lock().expect("Schedule lock").len());
 
         fmt.write_str(&format!("{} {}", threads, queue_size))
     }
@@ -709,14 +709,16 @@ pub mod test {
                 action();
                 tx1.send(ThreadState::Ok).ok();
             })
-            .unwrap();
+            .expect("Create timeout run thread");
 
-        thread::spawn(move || {
+        thread::Builder::new()
+            .name("timeout thread".to_string())
+            .spawn(move || {
             thread::sleep(Duration::from_millis(millis));
             tx2.send(ThreadState::Timeout).ok();
-        });
+        }).expect("Create timeout timer thread");
 
-        match rx.recv().unwrap() {
+        match rx.recv().expect("Receive timeout status") {
             ThreadState::Ok => (),
             ThreadState::Timeout => {
                 println!("{:?}", scheduler());
