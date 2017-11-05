@@ -1087,6 +1087,33 @@ pub mod test {
     }
 
     #[test]
+    fn can_suspend_queue_with_local_drain() {
+        timeout(|| {
+            // Want a scheduler with 0 threads to force a 'drain on current thread' situation
+            let scheduler = Arc::new(Scheduler::new());
+            scheduler.set_max_threads(0);
+            scheduler.despawn_threads_if_overloaded();
+
+            let queue = scheduler.create_job_queue();
+            
+            // Job so there's something to drain
+            scheduler.async(&queue, ||{});
+            scheduler.suspend(&queue);
+
+            // Resume after a delay
+            let to_resume           = queue.clone();
+            let resume_scheduler    = scheduler.clone();
+            thread::spawn(move || {
+                thread::sleep(Duration::from_millis(100));
+                resume_scheduler.resume(&to_resume);
+            });
+
+            // Should be able to retrieve a value once the queue resumes
+            assert!(scheduler.sync(&queue, || 42) == 42);
+        }, 500);
+    }
+
+    #[test]
     fn can_resume_before_suspend() {
         timeout(|| {
             let queue       = queue();
