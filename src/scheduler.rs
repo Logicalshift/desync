@@ -170,6 +170,7 @@ impl JobQueue {
     /// Runs jobs on this queue until there are none left, marking the job as inactive when done
     /// 
     fn drain(&self) {
+        debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
         let mut done = false;
 
         while !done {
@@ -468,6 +469,8 @@ impl Scheduler {
         self.async(queue, move || {
             // Mark the queue as suspended
             let mut core = to_suspend.core.lock().expect("JobQueue core lock");
+
+            debug_assert!(core.state == QueueState::Running);
 
             // Only actually suspend the core if it hasn't already been resumed elsewhere
             core.suspension_count += 1;
