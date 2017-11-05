@@ -584,7 +584,13 @@ impl Scheduler {
                 };
 
                 if wait_in_background {
-                    panic!("Don't know how to wait in backgorund :-(");
+                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runes.
+                    while result.lock().expect("Sync queue result lock").is_none() {
+                        // TODO: this busy waiting loop is terrible
+                        use std::thread;
+                        use std::time::Duration;
+                        thread::sleep(Duration::from_millis(1));
+                    }
                 }
             }
         }
