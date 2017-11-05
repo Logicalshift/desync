@@ -798,6 +798,32 @@ pub mod test {
     }
 
     #[test]
+    fn async_runs_in_order() {
+        for _x in 0..1000 {
+            timeout(|| {
+                let num_runs    = Arc::new(Mutex::new(0));
+                let queue       = queue();
+
+                let num_runs2   = num_runs.clone();
+                async(&queue, move || {
+                    let mut num_runs = num_runs2.lock().unwrap();
+                    *num_runs = 1
+                });
+                let num_runs3   = num_runs.clone();
+                async(&queue, move || {
+                    let mut num_runs = num_runs3.lock().unwrap();
+                    assert!(*num_runs == 1);
+                    *num_runs = 2
+                });
+
+                while *num_runs.lock().unwrap() == 0 {
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }, 100);
+        }
+    }
+
+    #[test]
     fn can_schedule_after_queue_released() {
         timeout(|| {
             {
@@ -1005,6 +1031,7 @@ pub mod test {
                 let pos         = Arc::new(Mutex::new(0));
 
                 // Increment the position, suspend the queue, increment it again
+                // TODO: looks like the first increment is running twice?
                 let pos2        = pos.clone();
                 async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
                 scheduler.suspend(&queue);
