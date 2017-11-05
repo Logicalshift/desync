@@ -48,6 +48,7 @@
 // TODO: test suspension when in 'drain on this thread' mode for sync() calls
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: handle panicking threads better
+// TODO: calling reschedule_queue is unsafe if the queue is running but on a different thread
 
 use super::job::*;
 use super::unsafe_job::*;
@@ -499,6 +500,116 @@ impl Scheduler {
     }
 
     ///
+    /// Runs a sync job immediately on the current thread. Queue must be in Running mode for this to be valid
+    ///
+    fn sync_immediate<Result, TFn: FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+        debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+
+        // Call the function to get the result
+        let result = job();
+
+        // Queue is now idle
+        queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
+
+        // Not running any more
+        self.reschedule_queue(queue);
+
+        result
+    }
+
+    ///
+    /// Runs a sync job immediately by running all the jobs in the current queue 
+    ///
+    fn sync_drain<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+        debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+
+        // When the task runs on the queue, we'll put it here
+        let result = Arc::new(Mutex::new(None));
+
+        // Queue a job that'll run the requested job and then set the result
+        let queue_result        = result.clone();
+        let result_job          = Box::new(Job::new(move || {
+            let job_result = job();
+            *queue_result.lock().expect("Sync queue result lock") = Some(job_result);
+        }));
+
+        // Stuff on the queue normally has a 'static lifetime. When we're running
+        // sync, the task will be done by the time this method is finished, so
+        // we use an unsafe job to bypass the normal lifetime checking
+        let unsafe_result_job   = UnsafeJob::new(&*result_job);
+        queue.core.lock().expect("JobQueue core lock").queue.push_back(Box::new(unsafe_result_job));
+
+        // While there is no result, run a job from the queue
+        while result.lock().expect("Sync queue result lock").is_none() {
+            if let Some(mut job) = queue.dequeue() {
+                job.run();
+            } else {
+                panic!("Queue drained before synchronous job could execute");
+            }
+        }
+
+        // Reschedule the queue if there are any events left pending
+        // Note: the queue is already pending when we start running events from it here.
+        // This means it'll get dequeued by a thread eventually: maybe while it's running
+        // here. As we've set the queue state to running while we're busy, the thread won't
+        // start the queue while it's already running.
+        self.reschedule_queue(queue);
+
+        // Get the final result by swapping it out of the mutex
+        let mut final_result    = None;
+        let mut old_result      = result.lock().expect("Sync queue result lock");
+
+        mem::swap(&mut *old_result, &mut final_result);
+
+        final_result.expect("Finished sync request without result")
+    }
+
+    ///
+    /// Queues a sync job and waits for the queue to finish running 
+    ///
+    fn sync_background<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
+        // Queue a job that unparks this thread when done
+        let pair    = Arc::new((Mutex::new(None), Condvar::new()));
+        let pair2   = pair.clone();
+
+        // Safe job that signals the condvar when needed
+        let job     = Box::new(Job::new(move || {
+            let &(ref result, ref cvar) = &*pair2;
+
+            // Run the job
+            let actual_result = job();
+
+            // Set the result and notify the waiting thread
+            *result.lock().expect("Background job result lock") = Some(actual_result);
+            cvar.notify_one();
+        }));
+        
+        // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
+        let need_reschedule = {
+            // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
+            let unsafe_job  = Box::new(UnsafeJob::new(&*job));
+            let mut core    = queue.core.lock().expect("JobQueue core lock");
+
+            core.queue.push_back(unsafe_job);
+            core.state == QueueState::Idle
+        };
+        if need_reschedule { self.reschedule_queue(queue); }
+
+        // Wait for the result to arrive (and the sweet relief of no more unsafe job)
+        let &(ref lock, ref cvar) = &*pair;
+        let mut result = lock.lock().expect("Background job result lock");
+        
+        while result.is_none() {
+            result = cvar.wait(result).expect("Background job cvar wait");
+        }
+
+        // Get the final result by swapping it out of the mutex
+        let mut final_result    = None;
+        mem::swap(&mut *result, &mut final_result);
+        final_result.expect("Finished background sync job without result")
+    }
+
+    ///
     /// Schedules a job on this scheduler, which will run after any jobs that are already
     /// in the specified queue. This function will not return until the job has completed.
     ///
@@ -527,99 +638,9 @@ impl Scheduler {
         };
 
         match run_action {
-            RunAction::Immediate => {
-                // Call the function to get the result
-                let result = job();
-
-                // Not running any more
-                self.reschedule_queue(queue);
-
-                result
-            },
-
-            RunAction::DrainOnThisThread => {
-                // When the task runs on the queue, we'll put it here
-                let result = Arc::new(Mutex::new(None));
-
-                // Queue a job that'll run the requested job and then set the result
-                let queue_result        = result.clone();
-                let result_job          = Box::new(Job::new(move || {
-                    let job_result = job();
-                    *queue_result.lock().expect("Sync queue result lock") = Some(job_result);
-                }));
-
-                // Stuff on the queue normally has a 'static lifetime. When we're running
-                // sync, the task will be done by the time this method is finished, so
-                // we use an unsafe job to bypass the normal lifetime checking
-                let unsafe_result_job   = UnsafeJob::new(&*result_job);
-                queue.core.lock().expect("JobQueue core lock").queue.push_back(Box::new(unsafe_result_job));
-
-                // While there is no result, run a job from the queue
-                while result.lock().expect("Sync queue result lock").is_none() {
-                    if let Some(mut job) = queue.dequeue() {
-                        job.run();
-                    } else {
-                        panic!("Queue drained before synchronous job could execute");
-                    }
-                }
-
-                // Reschedule the queue if there are any events left pending
-                // Note: the queue is already pending when we start running events from it here.
-                // This means it'll get dequeued by a thread eventually: maybe while it's running
-                // here. As we've set the queue state to running while we're busy, the thread won't
-                // start the queue while it's already running.
-                self.reschedule_queue(queue);
-
-                // Get the final result by swapping it out of the mutex
-                let mut final_result    = None;
-                let mut old_result      = result.lock().expect("Sync queue result lock");
-
-                mem::swap(&mut *old_result, &mut final_result);
-
-                final_result.expect("Finished sync request without result")
-            },
-        
-            RunAction::WaitForBackground => {
-                // Queue a job that unparks this thread when done
-                let pair    = Arc::new((Mutex::new(None), Condvar::new()));
-                let pair2   = pair.clone();
-
-                // Safe job that signals the condvar when needed
-                let job     = Box::new(Job::new(move || {
-                    let &(ref result, ref cvar) = &*pair2;
-
-                    // Run the job
-                    let actual_result = job();
-
-                    // Set the result and notify the waiting thread
-                    *result.lock().expect("Background job result lock") = Some(actual_result);
-                    cvar.notify_one();
-                }));
-                
-                // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
-                let need_reschedule = {
-                    // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
-                    let unsafe_job  = Box::new(UnsafeJob::new(&*job));
-                    let mut core    = queue.core.lock().expect("JobQueue core lock");
-
-                    core.queue.push_back(unsafe_job);
-                    core.state == QueueState::Idle
-                };
-                if need_reschedule { self.reschedule_queue(queue); }
-
-                // Wait for the result to arrive (and the sweet relief of no more unsafe job)
-                let &(ref lock, ref cvar) = &*pair;
-                let mut result = lock.lock().expect("Background job result lock");
-                
-                while result.is_none() {
-                    result = cvar.wait(result).expect("Background job cvar wait");
-                }
-
-                // Get the final result by swapping it out of the mutex
-                let mut final_result    = None;
-                mem::swap(&mut *result, &mut final_result);
-                final_result.expect("Finished background sync job without result")
-            }
+            RunAction::Immediate            => self.sync_immediate(queue, job),
+            RunAction::DrainOnThisThread    => self.sync_drain(queue, job),
+            RunAction::WaitForBackground    => self.sync_background(queue, job)
         }
     }
 }
