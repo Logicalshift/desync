@@ -55,7 +55,6 @@ use super::scheduler_thread::*;
 
 use std::mem;
 use std::fmt;
-use std::thread;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
@@ -548,16 +547,15 @@ impl Scheduler {
         debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
 
         // When the task runs on the queue, we'll put it here
-        let result = Arc::new(Mutex::new(None));
+        let result = Arc::new((Mutex::new(None), Condvar::new()));
 
         // Queue a job that'll run the requested job and then set the result
         // We'll unpark the thread in case we need to handle a suspension
         let queue_result        = result.clone();
-        let unpark              = thread::current();
         let result_job          = Box::new(Job::new(move || {
             let job_result = job();
-            *queue_result.lock().expect("Sync queue result lock") = Some(job_result);
-            unpark.unpark();
+            *queue_result.0.lock().expect("Sync queue result lock") = Some(job_result);
+            queue_result.1.notify_one();
         }));
 
         // Stuff on the queue normally has a 'static lifetime. When we're running
@@ -567,7 +565,7 @@ impl Scheduler {
         queue.core.lock().expect("JobQueue core lock").queue.push_back(Box::new(unsafe_result_job));
 
         // While there is no result, run a job from the queue
-        while result.lock().expect("Sync queue result lock").is_none() {
+        while result.0.lock().expect("Sync queue result lock").is_none() {
             if let Some(mut job) = queue.dequeue() {
                 // Queue is running
                 debug_assert!(queue.core.lock().unwrap().state != QueueState::Suspended);
@@ -589,9 +587,11 @@ impl Scheduler {
 
                 if wait_in_background {
                     // After we ran the thread, it suspended. It will be rescheduled in the background before it runes.
-                    while result.lock().expect("Sync queue result lock").is_none() {
+                    while result.0.lock().expect("Sync queue result lock").is_none() {
                         // Park until the result becomes available
-                        thread::park();
+                        let parking = &result.1;
+                        let result  = result.0.lock().unwrap();
+                        let _result = parking.wait(result).unwrap();
                     }
                 }
             }
@@ -607,7 +607,7 @@ impl Scheduler {
 
         // Get the final result by swapping it out of the mutex
         let mut final_result    = None;
-        let mut old_result      = result.lock().expect("Sync queue result lock");
+        let mut old_result      = result.0.lock().expect("Sync queue result lock");
 
         mem::swap(&mut *old_result, &mut final_result);
 
