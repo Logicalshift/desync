@@ -477,9 +477,9 @@ impl Scheduler {
         let future_queue    = queue.clone();
         let next_future     = after.then(move |val| {
             // TODO: we always re-queue on the main scheduler here
+            let result = job(val);
             scheduler().resume(&future_queue);
-            future(&future_queue, move || { job(val) })
-                .then(|val| future::result(val.unwrap()))
+            future::result(result)
         });
 
         Box::new(next_future)
