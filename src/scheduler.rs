@@ -862,7 +862,7 @@ pub mod test {
                 }
 
                 assert!(sync(&queue, || 42) == 42);
-            }, 100);
+            }, 500);
         }
     }
 
@@ -950,7 +950,7 @@ pub mod test {
             }
 
             scheduler.despawn_threads_if_overloaded();
-        }, 500);
+        }, 30000);
     }
 
     #[test]
