@@ -227,8 +227,8 @@ impl Scheduler {
         // Update the maximum number of threads we can spawn
         { *self.max_threads.lock().expect("Max threads lock") = max_threads };
 
-        // Try to schedule a thread if we can
-        self.schedule_thread();
+        // Schedule as many threads as we can
+        while self.schedule_thread() {}
     }
 
     ///
