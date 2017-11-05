@@ -551,6 +551,7 @@ impl Scheduler {
         let result = Arc::new(Mutex::new(None));
 
         // Queue a job that'll run the requested job and then set the result
+        // We'll unpark the thread in case we need to handle a suspension
         let queue_result        = result.clone();
         let unpark              = thread::current();
         let result_job          = Box::new(Job::new(move || {
