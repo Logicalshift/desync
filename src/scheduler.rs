@@ -963,7 +963,9 @@ pub mod test {
                 while *pos.lock().unwrap() == 0 {
                     thread::sleep(Duration::from_millis(1));
                 }
-                assert!(*pos.lock().unwrap() == 1);
+                let result = *pos.lock().unwrap();
+                if result != 1 { println!("Actual result: {}", result); }
+                assert!(result == 1);
 
                 // Resume the queue and check that the next phase runs
                 scheduler.resume(&queue);
