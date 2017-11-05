@@ -176,6 +176,7 @@ impl JobQueue {
         while !done {
             // Run jobs until the queue is drained
             while let Some(mut job) = self.dequeue() {
+                debug_assert!(self.core.lock().unwrap().state != QueueState::Suspended);
                 job.run();
             }
 
