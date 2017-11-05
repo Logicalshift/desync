@@ -477,6 +477,7 @@ impl Scheduler {
         let future_queue    = queue.clone();
         let next_future     = after.then(move |val| {
             // TODO: we always re-queue on the main scheduler here
+            scheduler().resume(&future_queue);
             future(&future_queue, move || { job(val) })
                 .then(|val| future::result(val.unwrap()))
         });
@@ -1111,10 +1112,10 @@ pub mod test {
             future_tx.send(2).unwrap();
             let mut future  = executor::spawn(future);
 
+            assert!(future.wait_future().unwrap() == 4);
+
             assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
             assert!(rx.recv().unwrap() == 3);
-
-            assert!(future.wait_future().unwrap() == 4);
         }, 500);
     }
 
