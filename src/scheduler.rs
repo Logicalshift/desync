@@ -92,7 +92,7 @@ pub struct Scheduler {
 ///
 /// Represents the state of a job queue
 ///
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 enum QueueState {
     /// Queue is currently not running and not ready to run
     Idle,
@@ -102,6 +102,9 @@ enum QueueState {
 
     /// Queue has been assigned to a thread and is currently running
     Running,
+
+    /// Queue is running but should suspend instead of running the next step
+    Suspending,
 
     /// Queue has been suspended and won't run futher jobs
     Suspended
@@ -157,11 +160,12 @@ impl JobQueue {
     fn dequeue(&self) -> Option<Box<ScheduledJob>> {
         let mut core = self.core.lock().expect("JobQueue core lock");
 
-        if core.state == QueueState::Suspended {
-            // Stop dequeuing if the queue is suspended
+        if core.state == QueueState::Suspending {
+            // Stop dequeuing if the queue is suspending
             None
         } else {
             // Treat queue as running in all other states
+            debug_assert!(core.state == QueueState::Running);
             core.queue.pop_front()
         }
     }
@@ -183,14 +187,15 @@ impl JobQueue {
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspended);
+                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
-                    if core.state != QueueState::Suspended {
-                        // If the very last action was to suspend the queue, then it remains suspended
-                        core.state = QueueState::Idle;
-                    }
+                    core.state = match core.state {
+                        QueueState::Running     => QueueState::Idle,
+                        QueueState::Suspending  => QueueState::Suspended,
+                        x                       => x
+                    };
                     done = true;
                 }
             }
@@ -467,7 +472,7 @@ impl Scheduler {
         let to_suspend = queue.clone();
 
         self.async(queue, move || {
-            // Mark the queue as suspended
+            // Mark the queue as suspending
             let mut core = to_suspend.core.lock().expect("JobQueue core lock");
 
             debug_assert!(core.state == QueueState::Running);
@@ -475,7 +480,7 @@ impl Scheduler {
             // Only actually suspend the core if it hasn't already been resumed elsewhere
             core.suspension_count += 1;
             if core.suspension_count > 0 {
-                core.state = QueueState::Suspended;
+                core.state = QueueState::Suspending;
             }
         });
     }
@@ -492,10 +497,21 @@ impl Scheduler {
 
             // Queue becomes less suspended
             core.suspension_count -= 1;
-            if core.suspension_count <= 0 && core.state == QueueState::Suspended {
-                // If the queue was suspended and should no longer be, return it to the idle state
-                core.state = QueueState::Idle;
-                true
+            if core.suspension_count <= 0 {
+                match core.state {
+                    QueueState::Suspended => {
+                        // If the queue was suspended and should no longer be, return it to the idle state
+                        core.state = QueueState::Idle;
+                        true
+                    },
+                    QueueState::Suspending => {
+                        // If the queue was in the process of suspending, cancel that
+                        // and resume running
+                        core.state = QueueState::Running;
+                        false
+                    },
+                    _ => false
+                }
             } else {
                 false
             }
@@ -640,6 +656,7 @@ impl Scheduler {
 
             match core.state {
                 QueueState::Suspended   => RunAction::WaitForBackground,
+                QueueState::Suspending  => RunAction::WaitForBackground,
                 QueueState::Running     => RunAction::WaitForBackground,
                 QueueState::Pending     => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
                 QueueState::Idle        => { core.state = QueueState::Running; RunAction::Immediate }
