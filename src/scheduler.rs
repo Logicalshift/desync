@@ -175,13 +175,14 @@ impl JobQueue {
         while !done {
             // Run jobs until the queue is drained
             while let Some(mut job) = self.dequeue() {
-                debug_assert!(self.core.lock().unwrap().state != QueueState::Suspended);
+                debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
                 job.run();
             }
 
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
+                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspended);
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
