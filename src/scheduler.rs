@@ -683,22 +683,46 @@ pub mod test {
     use std::sync::mpsc::*;
 
     pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
+        enum ThreadState {
+            Ok,
+            Timeout,
+            Panic
+        };
+
         let (tx, rx)    = channel();
         let (tx1, tx2)  = (tx.clone(), tx.clone());
 
         spawn(move || {
+            struct DetectPanic(Sender<ThreadState>);
+            impl Drop for DetectPanic {
+                fn drop(&mut self) {
+                    if panicking() {
+                        self.0.send(ThreadState::Panic).ok();
+                    }
+                }
+            }
+
+            let _detectpanic = DetectPanic(tx1.clone());
+
             action();
-            tx1.send(true).ok();
+            tx1.send(ThreadState::Ok).ok();
         });
 
         spawn(move || {
             sleep(Duration::from_millis(millis));
-            tx2.send(false).ok();
+            tx2.send(ThreadState::Timeout).ok();
         });
 
-        if rx.recv().unwrap() == false {
-            println!("{:?}", scheduler());
-            panic!("Timeout");
+        match rx.recv().unwrap() {
+            ThreadState::Ok => (),
+            ThreadState::Timeout => {
+                println!("{:?}", scheduler());
+                panic!("Timeout");
+            },
+            ThreadState::Panic => {
+                println!("{:?}", scheduler());
+                panic!("Test thread panicked");
+            }
         }
     }
 
