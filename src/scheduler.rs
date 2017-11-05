@@ -55,6 +55,7 @@ use super::scheduler_thread::*;
 
 use std::mem;
 use std::fmt;
+use std::thread;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
@@ -551,9 +552,11 @@ impl Scheduler {
 
         // Queue a job that'll run the requested job and then set the result
         let queue_result        = result.clone();
+        let unpark              = thread::current();
         let result_job          = Box::new(Job::new(move || {
             let job_result = job();
             *queue_result.lock().expect("Sync queue result lock") = Some(job_result);
+            unpark.unpark();
         }));
 
         // Stuff on the queue normally has a 'static lifetime. When we're running
@@ -586,10 +589,8 @@ impl Scheduler {
                 if wait_in_background {
                     // After we ran the thread, it suspended. It will be rescheduled in the background before it runes.
                     while result.lock().expect("Sync queue result lock").is_none() {
-                        // TODO: this busy waiting loop is terrible
-                        use std::thread;
-                        use std::time::Duration;
-                        thread::sleep(Duration::from_millis(1));
+                        // Park until the result becomes available
+                        thread::park();
                     }
                 }
             }
