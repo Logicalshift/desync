@@ -47,6 +47,7 @@
 // TODO: move tests into a separate file
 // TODO: test suspension when in 'drain on this thread' mode for sync() calls
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
+// TODO: handle panicking threads better
 
 use super::job::*;
 use super::unsafe_job::*;
@@ -915,31 +916,35 @@ pub mod test {
 
     #[test]
     fn can_suspend_queue() {
-        timeout(|| {
-            let queue       = queue();
-            let scheduler   = scheduler();
+        for _x in 0..1000 {
+            timeout(|| {
+                let queue       = queue();
+                let scheduler   = scheduler();
 
-            let pos         = Arc::new(Mutex::new(0));
+                let pos         = Arc::new(Mutex::new(0));
 
-            // Increment the position, suspend the queue, increment it again
-            let pos2        = pos.clone();
-            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
-            scheduler.suspend(&queue);
-            let pos2        = pos.clone();
-            async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+                // Increment the position, suspend the queue, increment it again
+                let pos2        = pos.clone();
+                async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+                scheduler.suspend(&queue);
+                let pos2        = pos.clone();
+                async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
-            // Wait for long enough for these events to take place and check the queue
-            while *pos.lock().unwrap() == 0 {
-                sleep(Duration::from_millis(100));
-            }
-            assert!(*pos.lock().unwrap() == 1);
+                // Wait for long enough for these events to take place and check the queue
+                while *pos.lock().unwrap() == 0 {
+                    sleep(Duration::from_millis(1));
+                }
+                assert!(*pos.lock().unwrap() == 1);
 
-            // Resume the queue and check that the next phase runs
-            scheduler.resume(&queue);
-            sleep(Duration::from_millis(10));
-            assert!(*pos.lock().unwrap() == 2);
-            assert!(sync(&queue, || 42) == 42);
-        }, 500);
+                // Resume the queue and check that the next phase runs
+                scheduler.resume(&queue);
+                while *pos.lock().unwrap() == 1 {
+                    sleep(Duration::from_millis(1));
+                }
+                assert!(*pos.lock().unwrap() == 2);
+                assert!(sync(&queue, || 42) == 42);
+            }, 500);
+        }
     }
 
     #[test]
