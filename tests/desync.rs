@@ -122,15 +122,14 @@ fn can_wait_for_future() {
 
         // First value 0 -> 1
         desynced.async(|val| { 
+            // Sleep here so the future should be waiting for us
             sleep(Duration::from_millis(100));
-            println!("1");
             assert!(*val == 0);
             *val = 1; 
         });
 
         // Future should go 1 -> 2, but takes whatever future_tx sends
         let future = desynced.after(future_rx, |val, future_result| {
-            println!("2");
             assert!(*val == 1);
             *val = future_result.unwrap();
 
