@@ -726,7 +726,7 @@ pub mod test {
             },
             ThreadState::Panic => {
                 println!("{:?}", scheduler());
-                panic!("Test thread panicked");
+                panic!("Timed thread panicked");
             }
         }
     }
