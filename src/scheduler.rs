@@ -769,6 +769,28 @@ pub mod test {
     }
 
     #[test]
+    fn async_only_runs_once() {
+        for _x in 0..1000 {
+            timeout(|| {
+                let num_runs    = Arc::new(Mutex::new(0));
+                let queue       = queue();
+
+                let num_runs2   = num_runs.clone();
+                async(&queue, move || {
+                    let mut num_runs = num_runs2.lock().unwrap();
+                    *num_runs += 1
+                });
+
+                while *num_runs.lock().unwrap() == 0 {
+                    thread::sleep(Duration::from_millis(1));
+                }
+
+                assert!(*num_runs.lock().unwrap() == 1);
+            }, 100);
+        }
+    }
+
+    #[test]
     fn can_schedule_after_queue_released() {
         timeout(|| {
             {
