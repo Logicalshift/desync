@@ -586,7 +586,7 @@ impl Scheduler {
                 };
 
                 if wait_in_background {
-                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runes.
+                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs.
                     while result.0.lock().expect("Sync queue result lock").is_none() {
                         // Park until the result becomes available
                         let parking = &result.1;
