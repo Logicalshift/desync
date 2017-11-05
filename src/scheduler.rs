@@ -48,7 +48,6 @@
 // TODO: test suspension when in 'drain on this thread' mode for sync() calls
 // TODO: this can be implemented much more simply with GCD on OS X but that's not available on all platforms
 // TODO: handle panicking threads better
-// TODO: calling reschedule_queue is unsafe if the queue is running but on a different thread
 
 use super::job::*;
 use super::unsafe_job::*;
@@ -364,13 +363,13 @@ impl Scheduler {
     }
 
     ///
-    /// Schedules a queue if it is not already pending
+    /// If a queue is idle and has pending jobs, places it in the schedule
     ///
     fn reschedule_queue(&self, queue: &Arc<JobQueue>) {
         let reschedule = {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
-            if core.state != QueueState::Pending {
+            if core.state == QueueState::Idle {
                 // Schedule a thread to restart the queue if more things were queued
                 if core.queue.len() > 0 {
                     // Need to schedule the queue after this event
@@ -555,6 +554,7 @@ impl Scheduler {
         // This means it'll get dequeued by a thread eventually: maybe while it's running
         // here. As we've set the queue state to running while we're busy, the thread won't
         // start the queue while it's already running.
+        queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
         self.reschedule_queue(queue);
 
         // Get the final result by swapping it out of the mutex
