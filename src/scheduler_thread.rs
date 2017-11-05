@@ -1,6 +1,6 @@
 use super::job::*;
 
-use std::thread::*;
+use std::thread;
 use std::sync::mpsc::*;
 
 ///
@@ -11,7 +11,7 @@ pub struct SchedulerThread {
     jobs: Sender<Box<ScheduledJob>>,
 
     /// The thread itself
-    thread: JoinHandle<()>,
+    thread: thread::JoinHandle<()>,
 }
 
 impl SchedulerThread {
@@ -21,11 +21,13 @@ impl SchedulerThread {
     pub fn new() -> SchedulerThread {
         // All the thread does is run jobs from its channel
         let (jobs_in, jobs_out): (Sender<Box<ScheduledJob>>, Receiver<Box<ScheduledJob>>) = channel();
-        let thread = spawn(move || {
-            while let Ok(mut job) = jobs_out.recv() {
-                job.run();
-            }
-        });
+        let thread = thread::Builder::new()
+            .name("desync jobs thread".to_string())
+            .spawn(move || {
+                while let Ok(mut job) = jobs_out.recv() {
+                    job.run();
+                }
+            }).unwrap();
 
         SchedulerThread {
             jobs:   jobs_in,
@@ -43,7 +45,7 @@ impl SchedulerThread {
     ///
     /// De-spawns this thread and returns the join handle 
     ///
-    pub fn despawn(self) -> JoinHandle<()> {
+    pub fn despawn(self) -> thread::JoinHandle<()> {
         self.thread
     }
 }

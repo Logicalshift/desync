@@ -678,8 +678,8 @@ pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, j
 #[cfg(test)]
 pub mod test {
     use super::*;
+    use std::thread;
     use std::time::*;
-    use std::thread::*;
     use std::sync::mpsc::*;
 
     pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
@@ -692,24 +692,27 @@ pub mod test {
         let (tx, rx)    = channel();
         let (tx1, tx2)  = (tx.clone(), tx.clone());
 
-        spawn(move || {
-            struct DetectPanic(Sender<ThreadState>);
-            impl Drop for DetectPanic {
-                fn drop(&mut self) {
-                    if panicking() {
-                        self.0.send(ThreadState::Panic).ok();
+        thread::Builder::new()
+            .name("test timeout thread".to_string())
+            .spawn(move || {
+                struct DetectPanic(Sender<ThreadState>);
+                impl Drop for DetectPanic {
+                    fn drop(&mut self) {
+                        if thread::panicking() {
+                            self.0.send(ThreadState::Panic).ok();
+                        }
                     }
                 }
-            }
 
-            let _detectpanic = DetectPanic(tx1.clone());
+                let _detectpanic = DetectPanic(tx1.clone());
 
-            action();
-            tx1.send(ThreadState::Ok).ok();
-        });
+                action();
+                tx1.send(ThreadState::Ok).ok();
+            })
+            .unwrap();
 
-        spawn(move || {
-            sleep(Duration::from_millis(millis));
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(millis));
             tx2.send(ThreadState::Timeout).ok();
         });
 
@@ -776,7 +779,7 @@ pub mod test {
             let (tx1, tx2)  = (tx.clone(), tx.clone());
 
             async(&queue, move || {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
                 tx1.send(1).unwrap();
             });
             async(&queue, move || {
@@ -800,7 +803,7 @@ pub mod test {
 
             async(&queue1, move || {
                 // The other task needs to start within 100ms for this to work
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
                 tx.send(*queue1_check.lock().unwrap()).unwrap();
             });
             async(&queue2, move || {
@@ -881,12 +884,12 @@ pub mod test {
 
             let async_val = val.clone();
             async(&queue, move || {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
                 *async_val.lock().unwrap() = 42;
             });
 
             // Make sure a thread wakes up and claims the queue before we do
-            sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(10));
 
             let new_val = sync(&queue, move || { 
                 let v = val.lock().unwrap();
@@ -910,7 +913,7 @@ pub mod test {
 
             let async_val = val.clone();
             scheduler.async(&queue, move || {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
                 *async_val.lock().unwrap() = 42;
             });
 
@@ -930,7 +933,7 @@ pub mod test {
 
             let queue       = queue();
             let mut future  = executor::spawn(future(&queue, move || {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
                 42
             }));
 
@@ -956,14 +959,14 @@ pub mod test {
 
                 // Wait for long enough for these events to take place and check the queue
                 while *pos.lock().unwrap() == 0 {
-                    sleep(Duration::from_millis(1));
+                    thread::sleep(Duration::from_millis(1));
                 }
                 assert!(*pos.lock().unwrap() == 1);
 
                 // Resume the queue and check that the next phase runs
                 scheduler.resume(&queue);
                 while *pos.lock().unwrap() == 1 {
-                    sleep(Duration::from_millis(1));
+                    thread::sleep(Duration::from_millis(1));
                 }
                 assert!(*pos.lock().unwrap() == 2);
                 assert!(sync(&queue, || 42) == 42);
@@ -989,7 +992,7 @@ pub mod test {
 
             // Wait for long enough for these events to take place and check the queue
             while *pos.lock().unwrap() == 0 {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
             }
             assert!(*pos.lock().unwrap() == 2);
         }, 500);
@@ -1012,7 +1015,7 @@ pub mod test {
 
             // Wait for long enough for these events to take place and check the queue
             while *pos.lock().unwrap() == 0 {
-                sleep(Duration::from_millis(100));
+                thread::sleep(Duration::from_millis(100));
             }
             assert!(*pos.lock().unwrap() == 1);
         }, 500);
