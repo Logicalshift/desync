@@ -487,8 +487,9 @@ impl Scheduler {
     ///
     /// Requests that a queue be suspended once it has finished all of its active jobs
     ///
-    pub fn suspend(&self, queue: &Arc<JobQueue>) {
-        let to_suspend = queue.clone();
+    pub fn suspend(&self, queue: &Arc<JobQueue>) -> Box<Future<Item=(), Error=oneshot::Canceled>> {
+        let (suspended, will_be_suspended)  = oneshot::channel();
+        let to_suspend                      = queue.clone();
 
         self.async(queue, move || {
             // Mark the queue as suspending
@@ -498,10 +499,17 @@ impl Scheduler {
 
             // Only actually suspend the core if it hasn't already been resumed elsewhere
             core.suspension_count += 1;
-            if core.suspension_count > 0 {
+            if core.suspension_count == 1 {
                 core.state = QueueState::Suspending;
             }
+
+            // If we suspended, then notify the future (it'll cancel if we don't actually suspend)
+            if core.suspension_count > 0 {
+                suspended.send(()).ok();
+            }
         });
+
+        Box::new(will_be_suspended)
     }
 
     ///
