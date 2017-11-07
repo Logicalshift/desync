@@ -470,11 +470,30 @@ impl Scheduler {
     pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> Box<'a+Future<Item=Res, Error=Error>> 
     where TFn: 'static+Send+FnOnce(Result<Item, Error>) -> Result<Res, Error> {
         // Suspend the queue
-        self.suspend(queue);
+        let after_suspend = self.suspend(queue).map_err(|e| (None, Some(e)));
+
+        // Create a future that completes after we suspend and after our next future
+        let after = after.map_err(|e| (Some(e), None))
+            .join(after_suspend);
 
         // Resume it after the future completes
         let future_queue    = queue.clone();
         let next_future     = after.then(move |val| {
+            // It's invalid for the suspension not to be in effect when we run our future
+            let val = {
+                match val {
+                    Err((future_err, suspend_err)) => {
+                        if let Some(_suspend_err) = suspend_err {
+                            panic!("While waiting for a future: queue suspension was cancelled");
+                        } else {
+                            Err(future_err.expect("Both errors missing"))
+                        }
+                    },
+                    Ok((val, _)) => Ok(val)
+                }
+            };
+
+            // TODO: another thread could technically resume the queue, which results in unsafe behaviour from desync
             // TODO: we always re-queue on the main scheduler here
             let result = job(val);
             scheduler().resume(&future_queue);
