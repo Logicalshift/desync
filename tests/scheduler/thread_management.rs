@@ -1,7 +1,5 @@
 use desync::scheduler::*;
 
-use super::timeout::*;
-
 #[test]
 fn will_despawn_extra_threads() {
     // As we join with the threads, we'll timeout if any of the spawned threads fail to end
