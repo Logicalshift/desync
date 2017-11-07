@@ -7,6 +7,7 @@ license         = "Apache-2.0"
 description     = "A hassle-free data type for asynchronous programming"
 homepage        = "https://github.com/Logicalshift/desync"
 repository      = "https://github.com/Logicalshift/desync"
+documentation   = "http://www.logicalshift.io/rust/desync/0.1.1/desync/"
 readme          = "README.md"
 keywords        = ["async", "futures", "concurrency"]
 categories      = ["concurrency","asynchronous","algorithms","data-structures"]
