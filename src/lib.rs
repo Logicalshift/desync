@@ -79,8 +79,10 @@
 
 #[macro_use]
 extern crate lazy_static;
-extern crate num_cpus;
 extern crate futures;
+
+#[cfg(not(target_arch = "wasm32"))]
+extern crate num_cpus;
 
 pub mod scheduler;
 pub mod desync;

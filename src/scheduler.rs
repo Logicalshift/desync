@@ -55,11 +55,14 @@ use std::fmt;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
-use num_cpus;
 use futures::future;
 use futures::sync::oneshot;
 use futures::future::Future;
 
+#[cfg(not(target_arch = "wasm32"))]
+use num_cpus;
+
+#[cfg(not(target_arch = "wasm32"))]
 const MIN_THREADS: usize = 8;
 
 lazy_static! {
@@ -69,8 +72,17 @@ lazy_static! {
 ///
 /// The default maximum number of threads in a scheduler 
 ///
+#[cfg(not(target_arch = "wasm32"))]
 fn initial_max_threads() -> usize {
     MIN_THREADS.max(num_cpus::get()*2)
+}
+
+///
+/// The default maximum number of threads in a scheduler 
+///
+#[cfg(target_arch = "wasm32")]
+fn initial_max_threads() -> usize {
+    0
 }
 
 ///
@@ -221,12 +233,22 @@ impl Scheduler {
     /// Changes the maximum number of threads this scheduler can spawn (existing threads
     /// are not despawned by this method)
     ///
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_max_threads(&self, max_threads: usize) {
         // Update the maximum number of threads we can spawn
         { *self.max_threads.lock().expect("Max threads lock") = max_threads };
 
         // Schedule as many threads as we can
         while self.schedule_thread() {}
+    }
+
+    ///
+    /// Changes the maximum number of threads this scheduler can spawn (existing threads
+    /// are not despawned by this method)
+    ///
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_max_threads(&self, max_threads: usize) {
+        // Webassembly does not support threads so we run synchronously
     }
 
     ///
