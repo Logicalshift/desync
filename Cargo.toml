@@ -1,6 +1,6 @@
 [package]
 name            = "desync"
-version         = "0.1.1"
+version         = "0.1.2"
 authors         = ["Andrew Hunter <andrew@logicalshift.io>"]
 license         = "Apache-2.0"
 
@@ -14,5 +14,7 @@ categories      = ["concurrency","asynchronous","algorithms","data-structures"]
 
 [dependencies]
 lazy_static     = "0.2"
-num_cpus        = "1.0"
 futures         = "0.1.17"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+num_cpus        = "1.0"
