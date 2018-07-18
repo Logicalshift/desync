@@ -86,9 +86,11 @@ extern crate num_cpus;
 
 pub mod scheduler;
 pub mod desync;
+pub mod pipe;
 
 mod job;
 mod unsafe_job;
 mod scheduler_thread;
 
-pub use desync::*;
+pub use self::desync::*;
+pub use self::pipe::*;
