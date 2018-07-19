@@ -21,6 +21,6 @@ fn pipe_in_simple_stream() {
     pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| core.push(item));
 
     // Once the stream is drained, the core should contain Ok(1), Ok(2), Ok(3)
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(50));
     assert!(obj.sync(|core| core.clone()) == vec![Ok(1), Ok(2), Ok(3)])
 }
