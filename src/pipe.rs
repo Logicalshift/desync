@@ -24,6 +24,10 @@ lazy_static! {
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received.
 /// 
+/// Piping a stream to a `Desync` like this will cause it to start executing: ie, this is
+/// similar to calling `executor::spawn(stream)`, except that the stream will immediately
+/// start draining into the `Desync` object.
+/// 
 pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn)
 where   Core:       'static+Send,
         S:          'static+Send+Stream,
