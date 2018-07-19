@@ -6,6 +6,7 @@ use super::desync::*;
 
 use futures::*;
 use futures::executor;
+use futures::executor::Spawn;
 
 use std::mem;
 use std::sync::*;
@@ -46,7 +47,7 @@ where   Core:       'static+Send,
 
             match next {
                 // Just wait if the stream is not ready
-                Ok(Async::NotReady) => { return true; },
+                Ok(Async::NotReady) => { return Ok(Async::NotReady); },
 
                 // Stream returned a value
                 Ok(Async::Ready(Some(next))) => { 
@@ -69,7 +70,7 @@ where   Core:       'static+Send,
                 },
 
                 // Stream finished
-                Ok(Async::Ready(None)) => { return false; }
+                Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
             }
         }
     });
@@ -107,7 +108,7 @@ struct PollThread {
     notifications: Arc<Mutex<PollNotifications>>,
 
     /// The function that should be called for every notification ID
-    poll_functions: Arc<Mutex<HashMap<u32, Box<dyn FnMut() -> bool + Send>>>>,
+    poll_functions: Arc<Mutex<HashMap<u32, Spawn<Box<Future<Item=(), Error=()>+Send>>>>>,
 
     /// The joinhandle of the running thread
     thread: Arc<JoinHandle<()>>
@@ -170,7 +171,7 @@ impl PollThread {
     ///
     /// Starts the poll thread running (poll threads cannot currently be stopped)
     /// 
-    fn run(notifications: Arc<Mutex<PollNotifications>>, functions: Arc<Mutex<HashMap<u32, Box<dyn FnMut() -> bool + Send>>>>) -> JoinHandle<()> {
+    fn run(notifications: Arc<Mutex<PollNotifications>>, functions: Arc<Mutex<HashMap<u32, Spawn<Box<Future<Item=(), Error=()>+Send>>>>>) -> JoinHandle<()> {
         thread::spawn(move || {
             loop {
                 // Park the thread until there is something to do
@@ -192,7 +193,7 @@ impl PollThread {
 
                 for function_id in to_notify {
                     // Fetch the function. If it returns false, we need to remove it from the list
-                    let keep_function = functions.get_mut(&function_id)
+                    let finished_polling = functions.get_mut(&function_id)
                         .map(|poll_function| {
                             // Create the notification structure
                             let notify = PollNotify {
@@ -202,11 +203,12 @@ impl PollThread {
                             };
 
                             // Call the polling function
-                            executor::with_notify(&Arc::new(notify), 0, move || poll_function())
-                        });
+                            poll_function.poll_future_notify(&Arc::new(notify), 0)
+                        })
+                        .unwrap_or(Ok(Async::Ready(())));
                     
-                    // If the function exists and returns false, then remove it from the set that we're polling
-                    if keep_function == Some(false) {
+                    // If the polling function completes, then remove the function
+                    if finished_polling == Ok(Async::Ready(())) {
                         functions.remove(&function_id);
                     }
                 }
@@ -219,7 +221,7 @@ impl PollThread {
     /// notification system (ie, can call things like the stream poll function)
     /// 
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
-    where PollFn: 'static+Send+FnMut() -> bool {
+    where PollFn: 'static+Send+FnMut() -> Poll<(), ()> {
         let mut functions       = self.poll_functions.lock().unwrap();
         let mut notifications   = self.notifications.lock().unwrap();
 
@@ -227,8 +229,11 @@ impl PollThread {
         let id = notifications.next_id;
         notifications.next_id += 1;
 
-        // Store this item
-        functions.insert(id, Box::new(poll_fn));
+        // Turn the polling function into a future
+        let poll_fn: Box<dyn Future<Item=(), Error=()>+Send> = Box::new(future::poll_fn(poll_fn));
+        let poll_fn = executor::spawn(poll_fn);
+
+        functions.insert(id, poll_fn);
 
         // Mark it as notified
         notifications.notified_ids.insert(id);
