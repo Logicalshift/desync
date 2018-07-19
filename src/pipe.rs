@@ -39,40 +39,38 @@ where   Core:       'static+Send,
 
     // Poll the stream on the poll thread
     POLL_THREAD.monitor(move || {
-        // Read from the stream and create a new reference to the callback function
-        let next        = stream.poll();
-        let process     = Arc::clone(&process);
+        loop {
+            // Read the current status of the stream
+            let process     = Arc::clone(&process);
+            let next        = stream.poll();
 
-        match next {
-            // Just wait if the stream is not ready
-            Ok(Async::NotReady) => true,
+            match next {
+                // Just wait if the stream is not ready
+                Ok(Async::NotReady) => { return true; },
 
-            // Stream returned a value
-            Ok(Async::Ready(Some(next))) => { 
-                // Process the value on the stream
-                desync.async(move |core| {
-                    let mut process = process.lock().unwrap();
-                    let process     = &mut *process;
-                    process(core, Ok(next));
-                });
-                
-                true
-            },
+                // Stream returned a value
+                Ok(Async::Ready(Some(next))) => { 
+                    // Process the value on the stream
+                    desync.async(move |core| {
+                        let mut process = process.lock().unwrap();
+                        let process     = &mut *process;
+                        process(core, Ok(next));
+                    });
+                },
 
-            // Stream returned an error
-            Err(e) => {
-                // Process the error on the stream
-                desync.async(move |core| {
-                    let mut process = process.lock().unwrap();
-                    let process     = &mut *process;
-                    process(core, Err(e));
-                });
-                
-                true
-            },
+                // Stream returned an error
+                Err(e) => {
+                    // Process the error on the stream
+                    desync.async(move |core| {
+                        let mut process = process.lock().unwrap();
+                        let process     = &mut *process;
+                        process(core, Err(e));
+                    });
+                },
 
-            // Stream finished
-            Ok(Async::Ready(None)) => false
+                // Stream finished
+                Ok(Async::Ready(None)) => { return false; }
+            }
         }
     });
 }
