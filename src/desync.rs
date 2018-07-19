@@ -57,7 +57,7 @@ impl<T: 'static+Send> Desync<T> {
     pub fn async<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         unsafe {
-            // As drop() is the last thing called, we know that this object will still exist at the point where
+            // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
             let data = DataRef(&*self.data);
 
             async(&self.queue, move || {
