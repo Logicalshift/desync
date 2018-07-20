@@ -99,48 +99,15 @@ where   Core:       'static+Send,
 */
 
 ///
-/// In order to implement the polling functions, we need a thread that runs the executor
-/// for any streams that we're currently piping (calling pipe_in or pipe will effectively
-/// need to spawn the relevant stream).
-/// 
-/// This represents that thread. There's a bit of a limitation in that the `poll` methods 
-/// for the various streams will block the thread so this may start to bottleneck at times of
-/// high load or with streams with poll methods that take significant time to execute.
+/// The main polling component for that implements the stream pipes
 /// 
 struct PollThread {
-    /// The poll functions that are being monitored by this thread
-    notifications: Arc<Mutex<PollNotifications>>,
-
-    /// The function that should be called for every notification ID
-    poll_functions: Arc<Mutex<HashMap<u32, Spawn<Box<Future<Item=(), Error=()>+Send>>>>>,
-
-    /// The joinhandle of the running thread
-    thread: Arc<JoinHandle<()>>
-}
-
-///
-/// Stores things being monitored
-/// 
-struct PollNotifications {
-    /// Next available ID for a polling function
-    next_id: u32,
-
-    /// Poll functions where the notify handle has been set
-    notified_ids: HashSet<u32>
 }
 
 ///
 /// Provides the 'Notify' interface for a polling function with a particular ID
 /// 
 struct PollNotify {
-    /// The ID that should be marked as notified when the callback is made
-    id: u32,
-
-    /// The structure where the notifications are stored
-    notifications: Arc<Mutex<PollNotifications>>,
-
-    /// The thread that should be notified when this notification occurs
-    thread: thread::Thread
 }
 
 impl PollThread {
@@ -148,76 +115,9 @@ impl PollThread {
     /// Creates a new poll thread
     /// 
     pub fn new() -> PollThread {
-        // Create the monitors for the new thread
-        let notifications = PollNotifications {
-            next_id:        0,
-            notified_ids:   HashSet::new()  
-        };
-        let notifications = Arc::new(Mutex::new(notifications));
+        PollThread {
 
-        // Create the set of polling functions
-        let poll_functions = Arc::new(Mutex::new(HashMap::new()));
-
-        // Run the thread with the monitors
-        let thread = Self::run(Arc::clone(&notifications), Arc::clone(&poll_functions));
-        let thread = Arc::new(thread);
-
-        // Generate the thread object
-        let thread = PollThread { 
-            notifications:  notifications,
-            poll_functions: poll_functions,
-            thread:         thread
-        };
-
-        thread
-    }
-
-    ///
-    /// Starts the poll thread running (poll threads cannot currently be stopped)
-    /// 
-    fn run(notifications: Arc<Mutex<PollNotifications>>, functions: Arc<Mutex<HashMap<u32, Spawn<Box<Future<Item=(), Error=()>+Send>>>>>) -> JoinHandle<()> {
-        thread::spawn(move || {
-            loop {
-                // Park the thread until there is something to do
-                thread::park();
-
-                // Fetch the list of notified functions we should call
-                let to_notify = {
-                    let mut notifications   = notifications.lock().unwrap();
-                    let mut to_notify       = HashSet::new();
-
-                    mem::swap(&mut to_notify, &mut notifications.notified_ids);
-
-                    to_notify
-                };
-
-                // Notify each function in turn
-                let mut functions   = functions.lock().unwrap();
-                let thread          = thread::current();
-
-                for function_id in to_notify {
-                    // Fetch the function. If it returns false, we need to remove it from the list
-                    let finished_polling = functions.get_mut(&function_id)
-                        .map(|poll_function| {
-                            // Create the notification structure
-                            let notify = PollNotify {
-                                id:             function_id,
-                                notifications:  Arc::clone(&notifications),
-                                thread:         thread.clone()
-                            };
-
-                            // Call the polling function
-                            poll_function.poll_future_notify(&Arc::new(notify), 0)
-                        })
-                        .unwrap_or(Ok(Async::Ready(())));
-                    
-                    // If the polling function completes, then remove the function
-                    if finished_polling == Ok(Async::Ready(())) {
-                        functions.remove(&function_id);
-                    }
-                }
-            }
-        })
+        }
     }
 
     ///
@@ -226,34 +126,11 @@ impl PollThread {
     /// 
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
     where PollFn: 'static+Send+FnMut() -> Poll<(), ()> {
-        let mut functions       = self.poll_functions.lock().unwrap();
-        let mut notifications   = self.notifications.lock().unwrap();
 
-        // Get an ID for this monitor
-        let id = notifications.next_id;
-        notifications.next_id += 1;
-
-        // Turn the polling function into a future
-        let poll_fn: Box<dyn Future<Item=(), Error=()>+Send> = Box::new(future::poll_fn(poll_fn));
-        let poll_fn = executor::spawn(poll_fn);
-
-        functions.insert(id, poll_fn);
-
-        // Mark it as notified
-        notifications.notified_ids.insert(id);
-
-        // Wake the thread
-        self.thread.thread().unpark();
     }
 }
 
 impl executor::Notify for PollNotify {
     fn notify(&self, _id: usize) {
-        // Add our ID to the notification list
-        let mut notifications = self.notifications.lock().unwrap();
-        notifications.notified_ids.insert(self.id);
-
-        // Wake the thread
-        self.thread.unpark();
     }
 }
