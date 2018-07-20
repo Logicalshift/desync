@@ -82,7 +82,7 @@ where   Core:       'static+Send,
 
 /*
 ///
-/// Pipes a stream into this object. Whenever an item becomes available on the strema, the
+/// Pipes a stream into this object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received. The
 /// return value is placed onto the output stream.
 /// 
