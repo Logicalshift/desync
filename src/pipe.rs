@@ -62,6 +62,9 @@ lazy_static! {
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received.
 /// 
+/// This takes a weak reference to the passed in `Desync` object, so the pipe will stop if it's
+/// the only thing referencing this object.
+/// 
 /// Piping a stream to a `Desync` like this will cause it to start executing: ie, this is
 /// similar to calling `executor::spawn(stream)`, except that the stream will immediately
 /// start draining into the `Desync` object.
@@ -76,6 +79,9 @@ where   Core:       'static+Send,
     // Need a mutable version of the stream
     let mut stream = stream;
 
+    // We stop processing once the desync object is no longer used anywhere else
+    let desync = Arc::downgrade(&desync);
+
     // Wrap the process fn up so we can call it asynchronously
     // (it doesn't really need to be in a mutex as it's only called by our object but we need to make it pass Rust's checks and we don't have a way to specify this at the moment)
     let process = Arc::new(Mutex::new(process));
@@ -83,36 +89,43 @@ where   Core:       'static+Send,
     // Monitor the stream
     PIPE_MONITOR.monitor(move || {
         loop {
-            // Read the current status of the stream
-            let process     = Arc::clone(&process);
-            let next        = stream.poll();
+            let desync      = desync.upgrade();
 
-            match next {
-                // Just wait if the stream is not ready
-                Ok(Async::NotReady) => { return Ok(Async::NotReady); },
+            if let Some(desync) = desync {
+                // Read the current status of the stream
+                let process     = Arc::clone(&process);
+                let next        = stream.poll();
 
-                // Stop processing when the stream is finished
-                Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
+                match next {
+                    // Just wait if the stream is not ready
+                    Ok(Async::NotReady) => { return Ok(Async::NotReady); },
 
-                // Stream returned a value
-                Ok(Async::Ready(Some(next))) => { 
-                    // Process the value on the stream
-                    desync.sync(move |core| {
-                        let mut process = process.lock().unwrap();
-                        let process     = &mut *process;
-                        process(core, Ok(next));
-                    });
-                },
+                    // Stop processing when the stream is finished
+                    Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
 
-                // Stream returned an error
-                Err(e) => {
-                    // Process the error on the stream
-                    desync.sync(move |core| {
-                        let mut process = process.lock().unwrap();
-                        let process     = &mut *process;
-                        process(core, Err(e));
-                    });
-                },
+                    // Stream returned a value
+                    Ok(Async::Ready(Some(next))) => { 
+                        // Process the value on the stream
+                        desync.sync(move |core| {
+                            let mut process = process.lock().unwrap();
+                            let process     = &mut *process;
+                            process(core, Ok(next));
+                        });
+                    },
+
+                    // Stream returned an error
+                    Err(e) => {
+                        // Process the error on the stream
+                        desync.sync(move |core| {
+                            let mut process = process.lock().unwrap();
+                            let process     = &mut *process;
+                            process(core, Err(e));
+                        });
+                    },
+                }
+            } else {
+                // The desync target is no longer available - indicate that we've completed monitoring
+                return Ok(Async::Ready(()));
             }
         }
     });
@@ -122,6 +135,9 @@ where   Core:       'static+Send,
 /// Pipes a stream into this object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received. The
 /// return value is placed onto the output stream.
+/// 
+/// Unlike `pipe_in`, this keeps a strong reference to the `Desync` object so the processing
+/// will continue so long as the input stream has data and the output stream is not dropped.
 /// 
 /// The input stream will start executing and reading values immediately when this is called.
 /// Dropping the output stream will cause the pipe to be closed (the input stream will be
