@@ -35,7 +35,7 @@ fn pipe_in_mpsc_receiver() {
     let obj = Arc::new(Desync::new(vec![]));
 
     // Add anything received to the vector via a pipe
-    pipe_in(Arc::clone(&obj), receiver, |core: &mut Vec<i32>, item| core.push(item.unwrap()));
+    pipe_in(Arc::clone(&obj), receiver, |core, item| core.push(item.unwrap()));
 
     // Initially empty
     assert!(obj.sync(|core| core.clone()) == vec![]);
