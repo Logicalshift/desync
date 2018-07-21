@@ -1,5 +1,3 @@
-use std::mem;
-
 ///
 /// Trait implemented by things that can be scheduled as a job
 /// 
@@ -27,8 +25,7 @@ impl<TFn> ScheduledJob for Job<TFn>
 where TFn: Send+FnOnce() -> () {
     fn run(&mut self) {
         // Consume the action when it's run
-        let mut action = None;
-        mem::swap(&mut action, &mut self.action);
+        let action = self.action.take();
 
         if let Some(action) = action {
             action();
