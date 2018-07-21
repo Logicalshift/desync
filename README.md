@@ -1,17 +1,15 @@
 # Desync
 
-This library provides an alternative synchronisation mechanism to the usual threads/mutexes
-system. Instead of managing the threads, this focuses on managing the data, which largely
-does away with the need for many synchronisation primitives. Support for futures is provided
-to help interoperate with other Rust libraries.
+```toml
+[dependencies]
+desync = "0.2"
+```
 
-The main difference in approach is that while a 'traditional' mutual-exclusion based
-model focuses on managing access to data, this instead focuses on ordering access. Only
-one job can access data at a time because the jobs are always done in order. Defining
-the order of operations ahead of time makes it easier to reason about the runtime behaviour
-of a particular data structure.
+Desync provides a single type, `Desync<T>` that can be used to replace both threads and mutexes.
+This type schedules operations for a contained data structure so that they are always performed
+in order and optionally in the background.
 
-There is a single new synchronisation object: `Desync`. You create one like this:
+Such a `Desync` object can be created like so:
 
 ```Rust
 use desync::Desync;
@@ -45,11 +43,26 @@ serialized from the point of view of the data that they contain. When combined w
 to perform operations asynchronously, this provides a useful way to immediately parallelize
 long-running operations.
 
-There's one final operation to be aware of and that's `future`. This returns a boxed Future that
-can be used with other libraries that use them. It's conceptually the same as `sync`, except that
-it doesn't wait for the operation to complete:
+# Working with futures
+
+Desync has support for the `futures` library. The simplest operation is `future()`, which creates
+a future that runs asynchronously on a `Desync` object but - unlike `async()` can return a result.
+It works like this:
 
 ```Rust
 let future_number = number.future(|val| *val);
 assert!(executor::spawn(future_number).wait_future().unwrap() == 42);
+```
+
+There is also support for streams, via the `pipe_in()` and `pipe()` functions. These work on
+`Arc<Desync<T>>` references and provide a way to process a stream asynchronously. These two
+functions provide a powerful way to process input and also to connect `Desync` objects together
+using message-passing for communication.
+
+```Rust
+let some_object = Arc::new(Desync::new(some_object));
+pipe_in(Arc::clone(&number), some_stream, 
+    |some_object, input| input.map(|input| some_object.process(input)));
+let output_stream = pipe(Arc::clone(&number), some_stream, 
+    |some_object, input| input.map(|input| some_object.process_with_output(input)));
 ```

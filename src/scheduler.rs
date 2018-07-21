@@ -50,7 +50,6 @@ use super::job::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
 
-use std::mem;
 use std::fmt;
 use std::sync::*;
 use std::collections::vec_deque::*;
@@ -674,10 +673,8 @@ impl Scheduler {
         self.reschedule_queue(queue);
 
         // Get the final result by swapping it out of the mutex
-        let mut final_result    = None;
         let mut old_result      = result.0.lock().expect("Sync queue result lock");
-
-        mem::swap(&mut *old_result, &mut final_result);
+        let final_result        = old_result.take();
 
         final_result.expect("Finished sync request without result")
     }
@@ -722,8 +719,7 @@ impl Scheduler {
         }
 
         // Get the final result by swapping it out of the mutex
-        let mut final_result    = None;
-        mem::swap(&mut *result, &mut final_result);
+        let final_result        = result.take();
         final_result.expect("Finished background sync job without result")
     }
 
