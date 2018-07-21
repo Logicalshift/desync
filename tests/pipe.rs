@@ -126,6 +126,8 @@ fn pipe_through_produces_backpressure() {
     // Send 3 events to the pipe. Wait a bit between them to allow for processing time
     for _x in 0..3 {
         assert!(sender.try_send(1) == Ok(()));
+
+        // The wait here allows the message to flow through to the pipe (if we call try_send again before the pipe has a chance to accept the input)
         thread::sleep(Duration::from_millis(5));
     }
 
