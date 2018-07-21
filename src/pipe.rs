@@ -10,6 +10,7 @@ use futures::executor::Spawn;
 
 use std::sync::*;
 use std::result::Result;
+use std::collections::VecDeque;
 
 lazy_static! {
     /// The shared queue where we monitor for updates to the active pipe streams
@@ -38,7 +39,7 @@ where   Core:       'static+Send,
     // (it doesn't really need to be in a mutex as it's only called by our object but we need to make it pass Rust's checks and we don't have a way to specify this at the moment)
     let process = Arc::new(Mutex::new(process));
 
-    // Poll the stream on the poll thread
+    // Monitor the stream
     PIPE_MONITOR.monitor(move || {
         loop {
             // Read the current status of the stream
@@ -48,6 +49,9 @@ where   Core:       'static+Send,
             match next {
                 // Just wait if the stream is not ready
                 Ok(Async::NotReady) => { return Ok(Async::NotReady); },
+
+                // Stop processing when the stream is finished
+                Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
 
                 // Stream returned a value
                 Ok(Async::Ready(Some(next))) => { 
@@ -68,41 +72,165 @@ where   Core:       'static+Send,
                         process(core, Err(e));
                     });
                 },
-
-                // Stream finished
-                Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
             }
         }
     });
 }
 
-/*
 ///
 /// Pipes a stream into this object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received. The
 /// return value is placed onto the output stream.
 /// 
-pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> Box<dyn Stream<Item=Output, Error=OutputErr>> 
+pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> impl Stream<Item=Output, Error=OutputErr>
 where   Core:       'static+Send,
         S:          'static+Send+Stream,
         S::Item:    Send,
         S::Error:   Send,
-        Output:     Send,
-        OutputErr:  Send,
+        Output:     'static+Send,
+        OutputErr:  'static+Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, Result<S::Item, S::Error>) -> Result<Output, OutputErr> {
-    unimplemented!()
+    
+    // Fetch the input stream and prepare the process function for async calling
+    let mut input_stream    = stream;
+    let process             = Arc::new(Mutex::new(process));
+
+    // Create the output stream
+    let output_stream   = PipeStream::new();
+    let stream_core     = Arc::clone(&output_stream.core);
+    let stream_core     = Arc::downgrade(&stream_core);
+
+    // Monitor the input stream and pass data to the output stream
+    PIPE_MONITOR.monitor(move || {
+        loop {
+            let stream_core = stream_core.upgrade();
+
+            if let Some(stream_core) = stream_core {
+                // Read the current status of the stream
+                let process         = Arc::clone(&process);
+                let next            = input_stream.poll();
+                let mut next_item;
+
+                // Work out what the next item to pass to the process function should be
+                match next {
+                    // Just wait if the stream is not ready
+                    Ok(Async::NotReady) => { return Ok(Async::NotReady); },
+
+                    // Stop processing when the input stream is finished
+                    Ok(Async::Ready(None)) => { 
+                        // Mark the target stream as closed
+                        let mut stream_core = stream_core.lock().unwrap();
+                        stream_core.closed = true;
+                        stream_core.notify.take().map(|notify| notify.notify());
+
+                        // Pipe has finished
+                        return Ok(Async::Ready(()));
+                    }
+
+                    // Stream returned a value
+                    Ok(Async::Ready(Some(next))) => next_item = Ok(next),
+
+                    // Stream returned an error
+                    Err(e) => next_item = Err(e),
+                }
+
+                // Send the next item to be processed
+                desync.sync(move |core| {
+                    // Process the next item
+                    let mut process     = process.lock().unwrap();
+                    let process         = &mut *process;
+                    let next_item       = process(core, next_item);
+
+                    // Send to the pipe stream
+                    let mut stream_core = stream_core.lock().unwrap();
+
+                    stream_core.pending.push_back(next_item);
+                    stream_core.notify.take().map(|notify| notify.notify());
+                });
+
+            } else {
+                // We stop processing once nothing is reading from the target stream
+                return Ok(Async::Ready(()));
+            }
+        }
+    });
+
+    // The pipe stream is the result
+    output_stream
 }
-*/
+
+///
+/// The shared data for a pipe stream
+/// 
+struct PipeStreamCore<Item, Error>  {
+    /// The pending data for this stream
+    pending: VecDeque<Result<Item, Error>>,
+
+    /// True if the input stream has closed (the stream is closed once this is true and there are no more pending items)
+    closed: bool,
+
+    /// The task to notify when the stream changes
+    notify: Option<task::Task>
+}
 
 ///
 /// A stream generated by a pipe
 /// 
 struct PipeStream<Item, Error> {
-    /// The items pending on this stream
-    pending: Mutex<Vec<Result<Item, Error>>>,
+    core: Arc<Mutex<PipeStreamCore<Item, Error>>>
+}
 
-    /// The task waiting to be notified when new items arrive for this stream
-    notify: Mutex<Option<task::Task>>
+impl<Item, Error> PipeStream<Item, Error> {
+    ///
+    /// Creates a new, empty, pipestream
+    /// 
+    pub fn new() -> PipeStream<Item, Error> {
+        PipeStream {
+            core: Arc::new(Mutex::new(PipeStreamCore {
+                pending:    VecDeque::new(),
+                closed:     false,
+                notify:     None
+            }))
+        }
+    }
+}
+
+impl<Item, Error> Drop for PipeStream<Item, Error> {
+    fn drop(&mut self) {
+        let mut core = self.core.lock().unwrap();
+
+        // Flush the pending queue
+        core.pending = VecDeque::new();
+
+        // TODO: wake the monitor and stop listening to the source stream
+        // (Right now this will happen next time the source stream produces data)
+    }
+}
+
+impl<Item, Error> Stream for PipeStream<Item, Error> {
+    type Item   = Item;
+    type Error  = Error;
+
+    fn poll(&mut self) -> Poll<Option<Item>, Error> {
+        // Fetch the core
+        let mut core = self.core.lock().unwrap();
+
+        if let Some(item) = core.pending.pop_front() {
+            // Value waiting at the start of the stream
+            match item {
+                Ok(item)    => Ok(Async::Ready(Some(item))),
+                Err(erm)    => Err(erm)
+            }
+        } else if core.closed {
+            // No more data will be returned from this stream
+            Ok(Async::Ready(None))
+        } else {
+            // Stream not ready
+            core.notify = Some(task::current());
+
+            Ok(Async::NotReady)
+        }
+    }
 }
 
 ///

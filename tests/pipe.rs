@@ -49,3 +49,59 @@ fn pipe_in_mpsc_receiver() {
     thread::sleep(Duration::from_millis(10));
     assert!(obj.sync(|core| core.clone()) == vec![1, 2]);
 }
+
+#[test]
+fn pipe_through() {
+    // Create a channel we'll use to send data to the pipe
+    let (sender, receiver) = mpsc::channel(10);
+
+    // Create an object to pipe through
+    let obj = Arc::new(Desync::new(1));
+
+    // Create a pipe
+    let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
+
+    // Start things running
+    let mut sender      = executor::spawn(sender);
+    let mut pipe_out    = executor::spawn(pipe_out);
+
+    // Sending a value should add whatever is in the desync object
+    sender.wait_send(2).unwrap();
+    assert!(pipe_out.wait_stream() == Some(Ok(3)));
+
+    sender.wait_send(42).unwrap();
+    assert!(pipe_out.wait_stream() == Some(Ok(43)));
+
+    // Changing the value should change the output
+    obj.async(|core| *core = 2);
+
+    sender.wait_send(42).unwrap();
+    assert!(pipe_out.wait_stream() == Some(Ok(44)));
+}
+
+#[test]
+fn pipe_through_stream_closes() {
+    let mut pipe_out_with_closed_stream = {
+        // Create a channel we'll use to send data to the pipe
+        let (sender, receiver) = mpsc::channel(10);
+
+        // Create an object to pipe through
+        let obj = Arc::new(Desync::new(1));
+
+        // Create a pipe
+        let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
+
+        // Start things running
+        let mut sender      = executor::spawn(sender);
+        let mut pipe_out    = executor::spawn(pipe_out);
+
+        // Sending a value should add whatever is in the desync object
+        sender.wait_send(2).unwrap();
+        assert!(pipe_out.wait_stream() == Some(Ok(3)));
+
+        pipe_out
+    };
+
+    // The sender is now closed (the sender and receiver are dropped after the block above), so the pipe should close too
+    assert!(pipe_out_with_closed_stream.wait_stream() == None);
+}
