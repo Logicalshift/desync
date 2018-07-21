@@ -58,7 +58,7 @@ fn pipe_through() {
     // Create an object to pipe through
     let obj = Arc::new(Desync::new(1));
 
-    // Create a pipe
+    // Create a pipe that adds values from the stream to the value in the object
     let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
 
     // Start things running
@@ -88,7 +88,7 @@ fn pipe_through_stream_closes() {
         // Create an object to pipe through
         let obj = Arc::new(Desync::new(1));
 
-        // Create a pipe
+        // Create a pipe that adds values from the stream to the value in the object
         let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
 
         // Start things running
