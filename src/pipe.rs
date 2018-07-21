@@ -52,7 +52,7 @@ where   Core:       'static+Send,
                 // Stream returned a value
                 Ok(Async::Ready(Some(next))) => { 
                     // Process the value on the stream
-                    desync.async(move |core| {
+                    desync.sync(move |core| {
                         let mut process = process.lock().unwrap();
                         let process     = &mut *process;
                         process(core, Ok(next));
@@ -62,7 +62,7 @@ where   Core:       'static+Send,
                 // Stream returned an error
                 Err(e) => {
                     // Process the error on the stream
-                    desync.async(move |core| {
+                    desync.sync(move |core| {
                         let mut process = process.lock().unwrap();
                         let process     = &mut *process;
                         process(core, Err(e));
