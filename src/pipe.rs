@@ -146,6 +146,38 @@ where   Core:       'static+Send,
 /// Dropping the output stream will cause the pipe to be closed (the input stream will be
 /// dropped and no further processing will occur).
 /// 
+/// This example demonstrates how to create a simple demonstration pipe that takes hashset values
+/// and returns a stream indicating whether or not they were already included:
+/// 
+/// ```
+/// # extern crate futures;
+/// # extern crate desync;
+/// # use std::thread;
+/// # use std::time::Duration;
+/// # use std::collections::HashSet;
+/// # use std::sync::*;
+/// # 
+/// use futures::sync::mpsc;
+/// use futures::executor;
+/// use desync::*;
+/// 
+/// let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
+/// let (sender, receiver)  = mpsc::channel::<String>(5);
+/// 
+/// let value_inserted = pipe(Arc::clone(&desync_hashset), receiver, 
+///     |hashset, value| { value.map(|value| (value.clone(), hashset.insert(value))) });
+/// 
+/// let mut sender = executor::spawn(sender);
+/// sender.wait_send("Test".to_string());
+/// sender.wait_send("Another value".to_string());
+/// sender.wait_send("Test".to_string());
+/// 
+/// let mut value_inserted = executor::spawn(value_inserted);
+/// assert!(value_inserted.wait_stream() == Some(Ok(("Test".to_string(), true))));
+/// assert!(value_inserted.wait_stream() == Some(Ok(("Another value".to_string(), true))));
+/// assert!(value_inserted.wait_stream() == Some(Ok(("Test".to_string(), false))));
+/// ```
+/// 
 pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output, OutputErr>
 where   Core:       'static+Send,
         S:          'static+Send+Stream,

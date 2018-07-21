@@ -1,3 +1,7 @@
+//!
+//! The main `Desync` struct
+//! 
+
 use super::scheduler::*;
 
 use std::sync::Arc;

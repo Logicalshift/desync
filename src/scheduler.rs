@@ -1,4 +1,6 @@
 //!
+//! The scheduler provides the `JobQueue` synchronisation mechanism.
+//! 
 //! # Scheduler
 //! 
 //! The scheduler provides a new synchronisation mechanism: the `JobQueue`. You can get one
