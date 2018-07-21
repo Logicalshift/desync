@@ -8,16 +8,12 @@ use futures::*;
 use futures::executor;
 use futures::executor::Spawn;
 
-use std::mem;
 use std::sync::*;
-use std::thread;
-use std::thread::JoinHandle;
 use std::result::Result;
-use std::collections::{HashMap, HashSet};
 
 lazy_static! {
-    /// The shared poll thread that's used to schedule events from pipe streams
-    static ref POLL_THREAD: PollThread = PollThread::new();
+    /// The shared queue where we monitor for updates to the active pipe streams
+    static ref PIPE_MONITOR: PipeMonitor = PipeMonitor::new();
 }
 
 ///
@@ -43,7 +39,7 @@ where   Core:       'static+Send,
     let process = Arc::new(Mutex::new(process));
 
     // Poll the stream on the poll thread
-    POLL_THREAD.monitor(move || {
+    PIPE_MONITOR.monitor(move || {
         loop {
             // Read the current status of the stream
             let process     = Arc::clone(&process);
@@ -101,22 +97,46 @@ where   Core:       'static+Send,
 ///
 /// The main polling component for that implements the stream pipes
 /// 
-struct PollThread {
+struct PipeMonitor {
 }
 
 ///
 /// Provides the 'Notify' interface for a polling function with a particular ID
 /// 
-struct PollNotify {
+struct PipeNotify<PollFn: Send> {
+    next_poll: Arc<Desync<Option<Spawn<PollFn>>>>
 }
 
-impl PollThread {
+impl PipeMonitor {
     ///
     /// Creates a new poll thread
     /// 
-    pub fn new() -> PollThread {
-        PollThread {
+    pub fn new() -> PipeMonitor {
+        PipeMonitor {
+        }
+    }
 
+    ///
+    /// Performs a polling operation on a poll
+    /// 
+    fn poll<PollFn>(this_poll: &mut Option<Spawn<PollFn>>, next_poll: Arc<Desync<Option<Spawn<PollFn>>>>)
+    where PollFn: 'static+Send+Future<Item=(), Error=()> {
+        // If the polling function exists...
+        if let Some(mut poll) = this_poll.take() {
+            // Create a notification
+            let notify = PipeNotify {
+                next_poll: next_poll
+            };
+            let notify = Arc::new(notify);
+
+            // Poll the function
+            let poll_result = poll.poll_future_notify(&notify, 0);
+
+            // Keep the polling function alive if it has not finished yet
+            if poll_result != Ok(Async::Ready(())) {
+                // The take() call means that the polling won't continue unless we pass it forward like this
+                *this_poll = Some(poll);
+            }
         }
     }
 
@@ -126,11 +146,26 @@ impl PollThread {
     /// 
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
     where PollFn: 'static+Send+FnMut() -> Poll<(), ()> {
+        // Turn the polling function into a future (it will complete when monitoring is complete)
+        let poll_fn     = future::poll_fn(poll_fn);
 
+        // Spawn it with an executor
+        let poll_fn     = executor::spawn(poll_fn);
+
+        // Create a desync object for polling
+        let poll_fn     = Arc::new(Desync::new(Some(poll_fn)));
+        let next_poll   = Arc::clone(&poll_fn);
+
+        // Perform the initial polling
+        poll_fn.sync(move |poll_fn| Self::poll(poll_fn, next_poll));
     }
 }
 
-impl executor::Notify for PollNotify {
+impl<PollFn> executor::Notify for PipeNotify<PollFn>
+where PollFn: 'static+Send+Future<Item=(), Error=()> {
     fn notify(&self, _id: usize) {
+        // Poll the future whenever we're notified
+        let next_poll = Arc::clone(&self.next_poll);
+        self.next_poll.async(move |poll_fn| PipeMonitor::poll(poll_fn, next_poll));
     }
 }
