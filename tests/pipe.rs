@@ -105,3 +105,36 @@ fn pipe_through_stream_closes() {
     // The sender is now closed (the sender and receiver are dropped after the block above), so the pipe should close too
     assert!(pipe_out_with_closed_stream.wait_stream() == None);
 }
+
+#[test]
+fn pipe_through_produces_backpressure() {
+    // Create a channel we'll use to send data to the pipe
+    let (mut sender, receiver) = mpsc::channel(0);
+
+    // Create an object to pipe through
+    let obj = Arc::new(Desync::new(1));
+
+    // Create a pipe that adds values from the stream to the value in the object
+    let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
+
+    // Set the backpressure depth to 3
+    pipe_out.set_backpressure_depth(3);
+
+    // Start things running. We never read from this pipe here
+    let _pipe_out       = executor::spawn(pipe_out);
+
+    // Send 3 events to the pipe. Wait a bit between them to allow for processing time
+    for _x in 0..3 {
+        assert!(sender.try_send(1) == Ok(()));
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    // This will stick in the channel (pipe should not be accepting more input)
+    assert!(sender.try_send(2) == Ok(()));
+    thread::sleep(Duration::from_millis(5));
+
+    // Channel will push back on this one
+    let channel_full = sender.try_send(3);
+    assert!(channel_full.is_err());
+    assert!(channel_full.unwrap_err().is_full());
+}
