@@ -1,6 +1,47 @@
 //!
 //! Desync pipes provide a way to generate and process streams via a `Desync` object
 //! 
+//! Pipes are an excellent way to interface `Desync` objects and the futures library. Piping
+//! a stream into a `Desync` object is equivalent to spawning it with an executor, except
+//! without the need to dedicate a thread to running it.
+//! 
+//! There are two kinds of pipe. The `pipe_in` function creates a pipe that processes each
+//! value made available from a stream on a desync object as they arrive, producing no
+//! results. This is useful for cases where a `Desync` object is being used as the endpoint
+//! for some data processing (for example, to insert the results of an operation into an
+//! asynchronous database object).
+//! 
+//! The `pipe` function pipes data through an object. For every input value, it produces
+//! an output value. This is good for creating streams that perform some kind of asynchronous
+//! processing operation or that need to access data from inside a `Desync` object.
+//! 
+//! Here's an example of using `pipe_in` to store data in a `HashSet`:
+//! 
+//! ```
+//! # extern crate futures;
+//! # extern crate desync;
+//! # use std::thread;
+//! # use std::time::Duration;
+//! # use std::collections::HashSet;
+//! # use std::sync::*;
+//! # 
+//! use futures::sync::mpsc;
+//! use futures::executor;
+//! use desync::*;
+//! 
+//! let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
+//! let (sender, receiver)  = mpsc::channel(5);
+//! 
+//! pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { value.map(|value| hashset.insert(value)); });
+//! 
+//! let mut sender = executor::spawn(sender);
+//! sender.wait_send("Test".to_string());
+//! sender.wait_send("Another value".to_string());
+//! # 
+//! # thread::sleep(Duration::from_millis(5));
+//! # assert!(desync_hashset.sync(|hashset| hashset.contains(&("Test".to_string()))))
+//! ```
+//! 
 
 use super::desync::*;
 
@@ -81,6 +122,10 @@ where   Core:       'static+Send,
 /// Pipes a stream into this object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received. The
 /// return value is placed onto the output stream.
+/// 
+/// The input stream will start executing and reading values immediately when this is called.
+/// Dropping the output stream will cause the pipe to be closed (the input stream will be
+/// dropped and no further processing will occur).
 /// 
 pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> impl Stream<Item=Output, Error=OutputErr>
 where   Core:       'static+Send,
