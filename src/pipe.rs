@@ -58,6 +58,9 @@ lazy_static! {
     static ref PIPE_MONITOR: PipeMonitor = PipeMonitor::new();
 }
 
+/// The maximum number of items to queue on a pipe stream before we stop accepting new input
+const PIPE_BACKPRESSURE_COUNT: usize = 10;
+
 ///
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received.
@@ -231,7 +234,10 @@ struct PipeStreamCore<Item, Error>  {
     closed: bool,
 
     /// The task to notify when the stream changes
-    notify: Option<task::Task>
+    notify: Option<task::Task>,
+
+    /// The task to notify when we reduce the amount of pending data
+    backpressure_release_notify: Option<task::Task>
 }
 
 ///
@@ -248,9 +254,10 @@ impl<Item, Error> PipeStream<Item, Error> {
     pub fn new() -> PipeStream<Item, Error> {
         PipeStream {
             core: Arc::new(Mutex::new(PipeStreamCore {
-                pending:    VecDeque::new(),
-                closed:     false,
-                notify:     None
+                pending:                        VecDeque::new(),
+                closed:                         false,
+                notify:                         None,
+                backpressure_release_notify:    None
             }))
         }
     }
@@ -278,6 +285,8 @@ impl<Item, Error> Stream for PipeStream<Item, Error> {
 
         if let Some(item) = core.pending.pop_front() {
             // Value waiting at the start of the stream
+            core.backpressure_release_notify.take().map(|notify| notify.notify());
+
             match item {
                 Ok(item)    => Ok(Async::Ready(Some(item))),
                 Err(erm)    => Err(erm)
