@@ -61,8 +61,10 @@ using message-passing for communication.
 
 ```Rust
 let some_object = Arc::new(Desync::new(some_object));
+
 pipe_in(Arc::clone(&number), some_stream, 
     |some_object, input| input.map(|input| some_object.process(input)));
+
 let output_stream = pipe(Arc::clone(&number), some_stream, 
     |some_object, input| input.map(|input| some_object.process_with_output(input)));
 ```
