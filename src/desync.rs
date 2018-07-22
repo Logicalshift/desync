@@ -95,7 +95,7 @@ impl<T: 'static+Send> Desync<T> {
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<Future<Item=Item, Error=oneshot::Canceled>>
+    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<dyn Future<Item=Item, Error=oneshot::Canceled>>
     where TFn: 'static+Send+FnOnce(&mut T) -> Item {
         let (send, receive) = oneshot::channel();
 
@@ -114,7 +114,7 @@ impl<T: 'static+Send> Desync<T> {
     /// After the pending operations for this item are performed, waits for the
     /// supplied future to complete and then calls the specified function
     ///
-    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, after: Fut, job: TFn) -> Box<'a+Future<Item=Res, Error=Error>> 
+    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, after: Fut, job: TFn) -> Box<dyn 'a+Future<Item=Res, Error=Error>> 
     where TFn: 'static+Send+FnOnce(&mut T, Result<Item, Error>) -> Result<Res, Error> {
         unsafe {
             // As drop() is the last thing called, we know that this object will still exist at the point where

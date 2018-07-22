@@ -8,7 +8,7 @@ use std::sync::mpsc::*;
 ///
 pub struct SchedulerThread {
     /// The jobs that this thread should run
-    jobs: Sender<Box<ScheduledJob>>,
+    jobs: Sender<Box<dyn ScheduledJob>>,
 
     /// The thread itself
     thread: thread::JoinHandle<()>,
@@ -20,7 +20,7 @@ impl SchedulerThread {
     ///
     pub fn new() -> SchedulerThread {
         // All the thread does is run jobs from its channel
-        let (jobs_in, jobs_out): (Sender<Box<ScheduledJob>>, Receiver<Box<ScheduledJob>>) = channel();
+        let (jobs_in, jobs_out): (Sender<Box<dyn ScheduledJob>>, Receiver<Box<dyn ScheduledJob>>) = channel();
         let thread = thread::Builder::new()
             .name("desync jobs thread".to_string())
             .spawn(move || {

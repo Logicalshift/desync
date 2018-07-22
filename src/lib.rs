@@ -77,6 +77,8 @@
 //! ```
 //! 
 
+#![warn(bare_trait_objects)]
+
 #[macro_use]
 extern crate lazy_static;
 extern crate futures;

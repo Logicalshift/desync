@@ -7,15 +7,15 @@ use std::mem;
 ///
 pub struct UnsafeJob {
     // TODO: this can become Shared<> once that API stabilises
-    action: *const ScheduledJob
+    action: *const dyn ScheduledJob
 }
 
 impl UnsafeJob {
     ///
     /// Creates an unsafe job. The referenced object should last as long as the job does
     ///
-    pub fn new<'a>(action: &'a ScheduledJob) -> UnsafeJob {
-        let action_ptr: *const ScheduledJob = action;
+    pub fn new<'a>(action: &'a dyn ScheduledJob) -> UnsafeJob {
+        let action_ptr: *const dyn ScheduledJob = action;
 
         // Transmute to remove the lifetime parameter :-/
         // (We're safe provided this job is executed before the reference goes away)
@@ -27,7 +27,7 @@ unsafe impl Send for UnsafeJob {}
 impl ScheduledJob for UnsafeJob {
     fn run(&mut self) {
         unsafe {
-            let action = self.action as *mut ScheduledJob;
+            let action = self.action as *mut dyn ScheduledJob;
             (*action).run();
         }
     }
