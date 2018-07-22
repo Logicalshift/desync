@@ -22,6 +22,16 @@ fn can_retrieve_data_synchronously() {
 }
 
 #[test]
+fn can_retrieve_data_into_local_var() {
+    let desynced = Desync::new(TestData { val: 42 });
+    let mut val = 0;
+
+    desynced.sync(|data| val = data.val);
+
+    assert!(val == 42);
+}
+
+#[test]
 fn can_update_data_asynchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
