@@ -15,14 +15,14 @@ struct TestData {
 }
 
 #[test]
-fn can_retrieve_data_synchronously() {
+fn retrieve_data_synchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
     assert!(desynced.sync(|data| data.val) == 0);
 }
 
 #[test]
-fn can_retrieve_data_into_local_var() {
+fn retrieve_data_into_local_var() {
     let desynced = Desync::new(TestData { val: 42 });
     let mut val = 0;
 
@@ -32,7 +32,7 @@ fn can_retrieve_data_into_local_var() {
 }
 
 #[test]
-fn can_update_data_asynchronously() {
+fn update_data_asynchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
     desynced.async(|data| {
@@ -44,7 +44,7 @@ fn can_update_data_asynchronously() {
 }
 
 #[test]
-fn can_update_data_asynchronously_1000_times() {
+fn update_data_asynchronously_1000_times() {
     for _i in 0..1000 {
         timeout(|| {
             let desynced = Desync::new(TestData { val: 0 });
@@ -62,7 +62,7 @@ fn can_update_data_asynchronously_1000_times() {
 }
 
 #[test]
-fn can_update_data_with_future() {
+fn update_data_with_future() {
     timeout(|| {
         use futures::executor;
 
@@ -82,7 +82,7 @@ fn can_update_data_with_future() {
 }
 
 #[test]
-fn can_update_data_with_future_1000_times() {
+fn update_data_with_future_1000_times() {
     // Seems to timeout fairly reliably after signalling the future
     use futures::executor;
 
@@ -119,7 +119,7 @@ fn dropping_while_running_isnt_obviously_bad() {
 }
 
 #[test]
-fn can_wait_for_future() {
+fn wait_for_future() {
     // TODO: occasional test failure that happens if the future 'arrives' before the queue is empty
     // (Because we need a future that arrives when the queue is actually suspended)
     timeout(|| {

@@ -9,7 +9,7 @@ use std::sync::mpsc::*;
 use futures::sync::oneshot;
 
 #[test]
-fn can_schedule_future() {
+fn schedule_future() {
     timeout(|| {
         use futures::executor;
 
@@ -24,7 +24,7 @@ fn can_schedule_future() {
 }
 
 #[test]
-fn can_wait_for_future() {
+fn wait_for_future() {
     timeout(|| {
         use futures::executor;
 

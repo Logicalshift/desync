@@ -8,7 +8,7 @@ use std::sync::*;
 use std::sync::mpsc::*;
 
 #[test]
-fn can_schedule_async() {
+fn schedule_async() {
     timeout(|| {
         let (tx, rx)    = channel();
         let queue       = queue();
@@ -67,7 +67,7 @@ fn async_runs_in_order_1000_iter() {
 }
 
 #[test]
-fn can_schedule_after_queue_released() {
+fn schedule_after_queue_released() {
     timeout(|| {
         {
             let (tx, rx)    = channel();

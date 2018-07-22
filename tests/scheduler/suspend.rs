@@ -8,7 +8,7 @@ use std::sync::*;
 use std::sync::mpsc::*;
 
 #[test]
-fn can_suspend_queue() {
+fn suspend_queue() {
     for _x in 0..1000 {
         timeout(|| {
             let queue           = queue();
@@ -46,7 +46,7 @@ fn can_suspend_queue() {
 }
 
 #[test]
-fn can_suspend_queue_with_local_drain() {
+fn suspend_queue_with_local_drain() {
     timeout(|| {
         // Want a scheduler with 0 threads to force a 'drain on current thread' situation
         let scheduler = Arc::new(Scheduler::new());
@@ -76,7 +76,7 @@ fn can_suspend_queue_with_local_drain() {
 }
 
 #[test]
-fn can_resume_before_suspend() {
+fn resume_before_suspend() {
     for _x in 0..1000 {
         timeout(|| {
             let (tx, rx)    = channel();

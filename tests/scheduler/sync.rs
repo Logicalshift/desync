@@ -8,7 +8,7 @@ use std::sync::*;
 use std::sync::mpsc::*;
 
 #[test]
-fn can_schedule_sync() {
+fn schedule_sync() {
     timeout(|| {
         let queue   = queue();
 
@@ -34,7 +34,7 @@ fn sync_has_synchronous_lifetime() {
 }
 
 #[test]
-fn can_reschedule_after_immediate_sync() {
+fn reschedule_after_immediate_sync() {
     timeout(|| {
         let (tx, rx)    = channel();
         let queue       = queue();
@@ -54,7 +54,7 @@ fn can_reschedule_after_immediate_sync() {
 }
 
 #[test]
-fn can_schedule_sync_after_async() {
+fn schedule_sync_after_async() {
     timeout(|| {
         let val         = Arc::new(Mutex::new(0));
         let queue       = queue();
