@@ -109,7 +109,7 @@ where   Core:       'static+Send,
                     // Stream returned a value
                     Ok(Async::Ready(Some(next))) => { 
                         // Process the value on the stream
-                        desync.sync(move |core| {
+                        desync.async(move |core| {
                             let mut process = process.lock().unwrap();
                             let process     = &mut *process;
                             process(core, Ok(next));
@@ -119,7 +119,7 @@ where   Core:       'static+Send,
                     // Stream returned an error
                     Err(e) => {
                         // Process the error on the stream
-                        desync.sync(move |core| {
+                        desync.async(move |core| {
                             let mut process = process.lock().unwrap();
                             let process     = &mut *process;
                             process(core, Err(e));
@@ -246,7 +246,7 @@ where   Core:       'static+Send,
                 }
 
                 // Send the next item to be processed
-                desync.sync(move |core| {
+                desync.async(move |core| {
                     // Process the next item
                     let mut process     = process.lock().unwrap();
                     let process         = &mut *process;
@@ -435,6 +435,6 @@ where PollFn: 'static+Send+Future<Item=(), Error=()> {
     fn notify(&self, _id: usize) {
         // Poll the future whenever we're notified
         let next_poll = Arc::clone(&self.next_poll);
-        self.next_poll.async(move |poll_fn| PipeMonitor::poll(poll_fn, next_poll));
+        self.next_poll.sync(move |poll_fn| PipeMonitor::poll(poll_fn, next_poll));
     }
 }
