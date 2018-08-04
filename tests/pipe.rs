@@ -45,8 +45,7 @@ fn pipe_in_mpsc_receiver() {
     sender.wait_send(1).unwrap();
     sender.wait_send(2).unwrap();
 
-    // Should arrive after a short delay
-    thread::sleep(Duration::from_millis(10));
+    // Should be available on the core
     assert!(obj.sync(|core| core.clone()) == vec![1, 2]);
 }
 
