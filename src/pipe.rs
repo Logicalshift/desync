@@ -20,8 +20,6 @@
 //! ```
 //! # extern crate futures;
 //! # extern crate desync;
-//! # use std::thread;
-//! # use std::time::Duration;
 //! # use std::collections::HashSet;
 //! # use std::sync::*;
 //! # 
@@ -38,7 +36,6 @@
 //! sender.wait_send("Test".to_string());
 //! sender.wait_send("Another value".to_string());
 //! # 
-//! # thread::sleep(Duration::from_millis(5));
 //! # assert!(desync_hashset.sync(|hashset| hashset.contains(&("Test".to_string()))))
 //! ```
 //! 
@@ -152,8 +149,6 @@ where   Core:       'static+Send,
 /// ```
 /// # extern crate futures;
 /// # extern crate desync;
-/// # use std::thread;
-/// # use std::time::Duration;
 /// # use std::collections::HashSet;
 /// # use std::sync::*;
 /// # 
