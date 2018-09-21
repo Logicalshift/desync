@@ -224,13 +224,15 @@ where   Core:       'static+Send,
 
                     // Stop processing when the input stream is finished
                     Ok(Async::Ready(None)) => { 
-                        // Mark the target stream as closed
-                        let notify = {
-                            let mut stream_core = stream_core.lock().unwrap();
-                            stream_core.closed = true;
-                            stream_core.notify.take()
-                        };
-                        notify.map(|notify| notify.notify());
+                        desync.async(move |_core| {
+                            // Mark the target stream as closed
+                            let notify = {
+                                let mut stream_core = stream_core.lock().unwrap();
+                                stream_core.closed = true;
+                                stream_core.notify.take()
+                            };
+                            notify.map(|notify| notify.notify());
+                        });
 
                         // Pipe has finished
                         return Ok(Async::Ready(()));
