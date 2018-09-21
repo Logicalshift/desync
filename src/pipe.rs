@@ -104,13 +104,20 @@ where   Core:       'static+Send,
                     Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
 
                     // Stream returned a value
-                    Ok(Async::Ready(Some(next))) => { 
+                    Ok(Async::Ready(Some(next))) => {
+                        let when_ready = task::current();
+
                         // Process the value on the stream
                         desync.async(move |core| {
                             let mut process = process.lock().unwrap();
                             let process     = &mut *process;
                             process(core, Ok(next));
+
+                            when_ready.notify();
                         });
+
+                        // Wake again when the processing finishes
+                        return Ok(Async::NotReady);
                     },
 
                     // Stream returned an error
@@ -246,6 +253,7 @@ where   Core:       'static+Send,
                 }
 
                 // Send the next item to be processed
+                let when_finished = task::current();
                 desync.async(move |core| {
                     // Process the next item
                     let mut process     = process.lock().unwrap();
@@ -260,7 +268,12 @@ where   Core:       'static+Send,
                         stream_core.notify.take()
                     };
                     notify.map(|notify| notify.notify());
+
+                    when_finished.notify();
                 });
+
+                // Poll again when the task is complete
+                return Ok(Async::NotReady);
 
             } else {
                 // We stop processing once nothing is reading from the target stream
