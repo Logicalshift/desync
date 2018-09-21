@@ -217,6 +217,11 @@ where   Core:       'static+Send,
                         // Go back to sleep without reading from the stream
                         return Ok(Async::NotReady);
                     }
+
+                    // If the core is closed, finish up
+                    if stream_core.closed {
+                        return Ok(Async::Ready(()));
+                    }
                 }
 
                 // Read the current status of the stream
@@ -231,6 +236,8 @@ where   Core:       'static+Send,
 
                     // Stop processing when the input stream is finished
                     Ok(Async::Ready(None)) => { 
+                        let when_closed = task::current();
+
                         desync.async(move |_core| {
                             // Mark the target stream as closed
                             let notify = {
@@ -239,10 +246,12 @@ where   Core:       'static+Send,
                                 stream_core.notify.take()
                             };
                             notify.map(|notify| notify.notify());
+
+                            when_closed.notify();
                         });
 
-                        // Pipe has finished
-                        return Ok(Async::Ready(()));
+                        // Pipe has finished. We return not ready here and finish up once the closed event fires
+                        return Ok(Async::NotReady);
                     }
 
                     // Stream returned a value
