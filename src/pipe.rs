@@ -225,9 +225,12 @@ where   Core:       'static+Send,
                     // Stop processing when the input stream is finished
                     Ok(Async::Ready(None)) => { 
                         // Mark the target stream as closed
-                        let mut stream_core = stream_core.lock().unwrap();
-                        stream_core.closed = true;
-                        stream_core.notify.take().map(|notify| notify.notify());
+                        let notify = {
+                            let mut stream_core = stream_core.lock().unwrap();
+                            stream_core.closed = true;
+                            stream_core.notify.take()
+                        };
+                        notify.map(|notify| notify.notify());
 
                         // Pipe has finished
                         return Ok(Async::Ready(()));
@@ -248,10 +251,13 @@ where   Core:       'static+Send,
                     let next_item       = process(core, next_item);
 
                     // Send to the pipe stream
-                    let mut stream_core = stream_core.lock().unwrap();
+                    let notify = {
+                        let mut stream_core = stream_core.lock().unwrap();
 
-                    stream_core.pending.push_back(next_item);
-                    stream_core.notify.take().map(|notify| notify.notify());
+                        stream_core.pending.push_back(next_item);
+                        stream_core.notify.take()
+                    };
+                    notify.map(|notify| notify.notify());
                 });
 
             } else {
