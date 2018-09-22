@@ -109,9 +109,11 @@ where   Core:       'static+Send,
 
                         // Process the value on the stream
                         desync.async(move |core| {
-                            let mut process = process.lock().unwrap();
-                            let process     = &mut *process;
-                            process(core, Ok(next));
+                            {
+                                let mut process = process.lock().unwrap();
+                                let process     = &mut *process;
+                                process(core, Ok(next));
+                            }
 
                             when_ready.notify();
                         });
