@@ -124,11 +124,17 @@ where   Core:       'static+Send,
 
                     // Stream returned an error
                     Err(e) => {
+                        let when_ready = task::current();
+
                         // Process the error on the stream
                         desync.async(move |core| {
-                            let mut process = process.lock().unwrap();
-                            let process     = &mut *process;
-                            process(core, Err(e));
+                            {
+                                let mut process = process.lock().unwrap();
+                                let process     = &mut *process;
+                                process(core, Err(e));
+                            }
+
+                            when_ready.notify()
                         });
                     },
                 }
