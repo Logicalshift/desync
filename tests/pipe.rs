@@ -22,6 +22,9 @@ fn pipe_in_simple_stream() {
     // Pipe the stream into the object
     pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| core.push(item));
 
+    // Delay to allow the messages to be processed on the stream
+    thread::sleep(Duration::from_millis(10));
+
     // Once the stream is drained, the core should contain Ok(1), Ok(2), Ok(3)
     assert!(obj.sync(|core| core.clone()) == vec![Ok(1), Ok(2), Ok(3)])
 }
@@ -29,7 +32,7 @@ fn pipe_in_simple_stream() {
 #[test]
 fn pipe_in_mpsc_receiver() {
     // Create a channel to send to the object
-    let (sender, receiver) = mpsc::channel(10);
+    let (sender, receiver) = mpsc::channel(0);
 
     // Create an object
     let obj = Arc::new(Desync::new(vec![]));
@@ -44,6 +47,11 @@ fn pipe_in_mpsc_receiver() {
     let mut sender = executor::spawn(sender);
     sender.wait_send(1).unwrap();
     sender.wait_send(2).unwrap();
+    
+    // Delay to allow the messages to be processed on the stream
+    // TODO: fix so this isn't needed. This happens because there's a race between when 'poll'
+    // is called in the pipe and the 'async' call
+    thread::sleep(Duration::from_millis(10));
 
     // Should be available on the core
     assert!(obj.sync(|core| core.clone()) == vec![1, 2]);
