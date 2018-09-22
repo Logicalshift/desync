@@ -373,26 +373,33 @@ impl<Item, Error> Stream for PipeStream<Item, Error> {
     type Error  = Error;
 
     fn poll(&mut self) -> Poll<Option<Item>, Error> {
-        // Fetch the core
-        let mut core = self.core.lock().unwrap();
+        let (result, notify) = {
+            // Fetch the state from the core
+            let mut core = self.core.lock().unwrap();
 
-        if let Some(item) = core.pending.pop_front() {
-            // Value waiting at the start of the stream
-            core.backpressure_release_notify.take().map(|notify| notify.notify());
+            if let Some(item) = core.pending.pop_front() {
+                // Value waiting at the start of the stream
+                let notify_backpressure = core.backpressure_release_notify.take();
 
-            match item {
-                Ok(item)    => Ok(Async::Ready(Some(item))),
-                Err(erm)    => Err(erm)
+                match item {
+                    Ok(item)    => (Ok(Async::Ready(Some(item))), notify_backpressure),
+                    Err(erm)    => (Err(erm), notify_backpressure)
+                }
+            } else if core.closed {
+                // No more data will be returned from this stream
+                (Ok(Async::Ready(None)), None)
+            } else {
+                // Stream not ready
+                let notify_backpressure = core.backpressure_release_notify.take();
+                core.notify = Some(task::current());
+
+                (Ok(Async::NotReady), notify_backpressure)
             }
-        } else if core.closed {
-            // No more data will be returned from this stream
-            Ok(Async::Ready(None))
-        } else {
-            // Stream not ready
-            core.notify = Some(task::current());
+        };
 
-            Ok(Async::NotReady)
-        }
+        // If anything needs notifying, do so outside of the lock
+        notify.map(|notify| notify.notify());
+        result
     }
 }
 
