@@ -661,6 +661,9 @@ impl Scheduler {
     fn sync_drain<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
 
+        // TODO: if the queue panics, then set the queue state to panicked for consistent behaviour if something keeps it alive for some reason
+        //      (bit tricky to use catch_unwind due to job not being UnwindSafe)
+
         // When the task runs on the queue, we'll put it here
         let result = Arc::new((Mutex::new(None), Condvar::new()));
 
