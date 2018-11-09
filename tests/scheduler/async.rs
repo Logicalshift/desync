@@ -22,6 +22,24 @@ fn schedule_async() {
 }
 
 #[test]
+#[should_panic]
+fn panicking_panics_with_future_queues() {
+    timeout(|| {
+        let queue       = queue();
+
+        async(&queue, move || {
+            panic!("Oh dear");
+        });
+
+        thread::sleep(Duration::from_millis(10));
+
+        async(&queue, move || {
+            println!("Should never get here");
+        });
+    }, 100);
+}
+
+#[test]
 fn async_only_runs_once() {
     for _x in 0..1000 {
         timeout(|| {

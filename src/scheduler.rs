@@ -53,6 +53,7 @@ use super::unsafe_job::*;
 use super::scheduler_thread::*;
 
 use std::fmt;
+use std::panic;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
@@ -188,31 +189,38 @@ impl JobQueue {
     /// Runs jobs on this queue until there are none left, marking the job as inactive when done
     /// 
     fn drain(&self) {
-        debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-        let mut done = false;
+        let panic_result = panic::catch_unwind(|| {
+            debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+            let mut done = false;
 
-        while !done {
-            // Run jobs until the queue is drained
-            while let Some(mut job) = self.dequeue() {
-                debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-                job.run();
-            }
+            while !done {
+                // Run jobs until the queue is drained
+                while let Some(mut job) = self.dequeue() {
+                    debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+                    job.run();
+                }
 
-            // Try to move back to the 'not running' state
-            {
-                let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
+                // Try to move back to the 'not running' state
+                {
+                    let mut core = self.core.lock().expect("JobQueue core lock");
+                    debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
 
-                // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
-                if core.queue.len() == 0 {
-                    core.state = match core.state {
-                        QueueState::Running     => QueueState::Idle,
-                        QueueState::Suspending  => QueueState::Suspended,
-                        x                       => x
-                    };
-                    done = true;
+                    // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
+                    if core.queue.len() == 0 {
+                        core.state = match core.state {
+                            QueueState::Running     => QueueState::Idle,
+                            QueueState::Suspending  => QueueState::Suspended,
+                            x                       => x
+                        };
+                        done = true;
+                    }
                 }
             }
+        });
+
+        // If the action panicked, set the queue to the panicked state so it can't continue to be used
+        if let Err(_err) = panic_result {
+            self.core.lock().unwrap().state = QueueState::Panicked;
         }
     }
 }
