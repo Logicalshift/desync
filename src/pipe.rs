@@ -46,17 +46,51 @@ use futures::*;
 use futures::executor;
 use futures::executor::Spawn;
 
+use std::mem;
 use std::sync::*;
+use std::ops::Deref;
 use std::result::Result;
 use std::collections::VecDeque;
 
 lazy_static! {
     /// The shared queue where we monitor for updates to the active pipe streams
     static ref PIPE_MONITOR: PipeMonitor = PipeMonitor::new();
+
+    /// Desync for disposing of references used in pipes (if a pipe is closed with pending data, this avoids clearing it in the same context as the pipe monitor)
+    static ref REFERENCE_CHUTE: Desync<()> = Desync::new(());
 }
 
 /// The maximum number of items to queue on a pipe stream before we stop accepting new input
 const PIPE_BACKPRESSURE_COUNT: usize = 5;
+
+/// Wraps an Arc<> that is dropped on a separate queue
+struct LazyDrop<Core: 'static+Send> {
+    reference: Option<Arc<Desync<Core>>>
+}
+
+impl<Core: 'static+Send> LazyDrop<Core> {
+    pub fn new(reference: Arc<Desync<Core>>) -> LazyDrop<Core> {
+        LazyDrop {
+            reference: Some(reference)
+        }
+    }
+}
+
+impl<Core: 'static+Send> Deref for LazyDrop<Core> {
+    type Target = Desync<Core>;
+
+    fn deref(&self) -> &Desync<Core> {
+        &*(self.reference.as_ref().unwrap())
+    }
+}
+
+impl<Core: 'static+Send> Drop for LazyDrop<Core> {
+    fn drop(&mut self) {
+        // Drop the reference down the chute (this ensures that if the Arc<Desync<X>> is freed, it won't block the monitor pipe when the contained Desync synchronises during drop)
+        let reference = self.reference.take();
+        REFERENCE_CHUTE.async(move |_| mem::drop(reference));
+    }
+}
 
 ///
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
@@ -89,9 +123,11 @@ where   Core:       'static+Send,
     // Monitor the stream
     PIPE_MONITOR.monitor(move || {
         loop {
-            let desync      = desync.upgrade();
+            let desync = desync.upgrade();
 
             if let Some(desync) = desync {
+                let desync      = LazyDrop::new(desync);
+
                 // Read the current status of the stream
                 let process     = Arc::clone(&process);
                 let next        = stream.poll();

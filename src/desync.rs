@@ -79,7 +79,7 @@ impl<T: 'static+Send> Desync<T> {
     pub fn sync<TFn, Result>(&self, job: TFn) -> Result
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
         let result = unsafe {
-            // As drop() is the last thing called, we know that this object will still exist at the point where
+            // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
             let data = DataRef(&*self.data);
 
             sync(&self.queue, move || {
