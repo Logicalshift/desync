@@ -114,6 +114,9 @@ enum QueueState {
     /// Queue has been assigned to a thread and is currently running
     Running,
 
+    /// Queue received a panic and is no longer able to be scheduled
+    Panicked,
+
     /// Queue is running but should suspend instead of running the next step
     Suspending,
 
@@ -444,6 +447,13 @@ impl Scheduler {
     /// in the specified queue and as soon as a thread is available to run it.
     ///
     pub fn async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
+        #[derive(PartialEq)]
+        enum ScheduleState {
+            Idle,
+            Running,
+            Panicked
+        }
+
         let schedule_queue = {
             let job         = Job::new(job);
             let mut core    = queue.core.lock().expect("JobQueue core lock");
@@ -451,23 +461,36 @@ impl Scheduler {
             // Push the job onto the queue
             core.queue.push_back(Box::new(job));
 
-            if core.state == QueueState::Idle {
-                // If the queue is idle, then move it to pending
-                core.state = QueueState::Pending;
-                true
-            } else {
-                // If the queue is in any other state, then we leave it alone
-                false
+            match core.state {
+                QueueState::Idle => {
+                    // If the queue is idle, then move it to pending
+                    core.state = QueueState::Pending;
+                    ScheduleState::Idle
+                },
+
+                QueueState::Panicked => {
+                    // If the queue has panicked, then pass it on
+                    ScheduleState::Panicked
+                },
+
+                _=> {
+                    // If the queue is in any other state, then we leave it alone
+                    ScheduleState::Running
+                }
             }
         };
 
         // If when we were queuing the jobs we found that the queue was idle, then move it to the pending list
-        if schedule_queue {
+        if schedule_queue == ScheduleState::Idle {
             // Add the queue to the schedule
             self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
 
             // Wake up a thread to run it if we can
             self.schedule_thread();
+        }
+
+        if schedule_queue == ScheduleState::Panicked {
+            panic!("Cannot schedule jobs on a panicked queue");
         }
     }
 
@@ -738,7 +761,10 @@ impl Scheduler {
             DrainOnThisThread,
 
             /// The queue is running in the background
-            WaitForBackground
+            WaitForBackground,
+
+            /// The queue is panicked
+            Panic
         }
 
         // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
@@ -749,6 +775,7 @@ impl Scheduler {
                 QueueState::Suspended   => RunAction::WaitForBackground,
                 QueueState::Suspending  => RunAction::WaitForBackground,
                 QueueState::Running     => RunAction::WaitForBackground,
+                QueueState::Panicked    => RunAction::Panic,
                 QueueState::Pending     => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
                 QueueState::Idle        => { core.state = QueueState::Running; RunAction::Immediate }
             }
@@ -757,7 +784,8 @@ impl Scheduler {
         match run_action {
             RunAction::Immediate            => self.sync_immediate(queue, job),
             RunAction::DrainOnThisThread    => self.sync_drain(queue, job),
-            RunAction::WaitForBackground    => self.sync_background(queue, job)
+            RunAction::WaitForBackground    => self.sync_background(queue, job),
+            RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
         }
     }
 }
