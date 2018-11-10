@@ -46,16 +46,14 @@
 //!
 
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
-// TODO: handle panicking threads better
 
 use super::job::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
 
 use std::fmt;
-use std::panic;
+use std::thread;
 use std::sync::*;
-use std::any::Any;
 use std::collections::vec_deque::*;
 
 use futures::future;
@@ -70,6 +68,23 @@ const MIN_THREADS: usize = 8;
 
 lazy_static! {
     static ref SCHEDULER: Arc<Scheduler> = Arc::new(Scheduler::new());
+}
+
+///
+/// Struct that holds the currently active queue and marks it as panicked if dropped during a panic
+///
+struct ActiveQueue<'a> {
+    queue: &'a JobQueue
+}
+
+impl<'a> Drop for ActiveQueue<'a> {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            self.queue.core.lock()
+                .map(|mut core| core.state = QueueState::Panicked)
+                .ok();
+        }
+    }
 }
 
 ///
@@ -133,9 +148,6 @@ struct JobQueueCore {
     /// The jobs that are scheduled on this queue
     queue: VecDeque<Box<dyn ScheduledJob>>,
 
-    /// The last panic to be caught on this queue
-    last_panic: Option<Box<dyn Any+Send>>,
-
     /// The current state of this queue
     state: QueueState,
     
@@ -167,7 +179,6 @@ impl JobQueue {
         JobQueue { 
             core: Mutex::new(JobQueueCore {
                 queue:              VecDeque::new(),
-                last_panic:         None,
                 state:              QueueState::Idle,
                 suspension_count:   0
             })
@@ -194,41 +205,33 @@ impl JobQueue {
     /// Runs jobs on this queue until there are none left, marking the job as inactive when done
     /// 
     fn drain(&self) {
-        let panic_result = panic::catch_unwind(|| {
-            debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-            let mut done = false;
+        let _active = ActiveQueue { queue: self };
 
-            while !done {
-                // Run jobs until the queue is drained
-                while let Some(mut job) = self.dequeue() {
-                    debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-                    job.run();
-                }
+        debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+        let mut done = false;
 
-                // Try to move back to the 'not running' state
-                {
-                    let mut core = self.core.lock().expect("JobQueue core lock");
-                    debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
+        while !done {
+            // Run jobs until the queue is drained
+            while let Some(mut job) = self.dequeue() {
+                debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+                job.run();
+            }
 
-                    // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
-                    if core.queue.len() == 0 {
-                        core.state = match core.state {
-                            QueueState::Running     => QueueState::Idle,
-                            QueueState::Suspending  => QueueState::Suspended,
-                            x                       => x
-                        };
-                        done = true;
-                    }
+            // Try to move back to the 'not running' state
+            {
+                let mut core = self.core.lock().expect("JobQueue core lock");
+                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
+
+                // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
+                if core.queue.len() == 0 {
+                    core.state = match core.state {
+                        QueueState::Running     => QueueState::Idle,
+                        QueueState::Suspending  => QueueState::Suspended,
+                        x                       => x
+                    };
+                    done = true;
                 }
             }
-        });
-
-        // If the action panicked, set the queue to the panicked state so it can't continue to be used
-        if let Err(err) = panic_result {
-            let mut core = self.core.lock().expect("JobQueue core lock");
-
-            core.state      = QueueState::Panicked;
-            core.last_panic = Some(err);
         }
     }
 }
@@ -466,7 +469,7 @@ impl Scheduler {
         enum ScheduleState {
             Idle,
             Running,
-            Panicked(Option<Box<dyn Any+Send>>)
+            Panicked
         }
 
         let schedule_queue = {
@@ -483,10 +486,7 @@ impl Scheduler {
                     ScheduleState::Idle
                 },
 
-                QueueState::Panicked => {
-                    // If the queue has panicked, then pass it on
-                    ScheduleState::Panicked(core.last_panic.take())
-                },
+                QueueState::Panicked => ScheduleState::Panicked,
 
                 _=> {
                     // If the queue is in any other state, then we leave it alone
@@ -507,11 +507,7 @@ impl Scheduler {
 
             ScheduleState::Running => { }
 
-            ScheduleState::Panicked(last_panic) => {
-                if let Some(last_panic) = last_panic {
-                    panic::resume_unwind(last_panic);
-                }
-
+            ScheduleState::Panicked => {
                 panic!("Cannot schedule jobs on a panicked queue");
             },
         }
@@ -643,6 +639,9 @@ impl Scheduler {
     fn sync_immediate<Result, TFn: FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
 
+        // Set the queue as active
+        let _active = ActiveQueue { queue: &*queue };
+
         // Call the function to get the result
         let result = job();
 
@@ -661,8 +660,8 @@ impl Scheduler {
     fn sync_drain<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
 
-        // TODO: if the queue panics, then set the queue state to panicked for consistent behaviour if something keeps it alive for some reason
-        //      (bit tricky to use catch_unwind due to job not being UnwindSafe)
+        // Set the queue as active
+        let _active = ActiveQueue { queue: &*queue };
 
         // When the task runs on the queue, we'll put it here
         let result = Arc::new((Mutex::new(None), Condvar::new()));
@@ -790,7 +789,7 @@ impl Scheduler {
             WaitForBackground,
 
             /// The queue is panicked
-            Panic(Option<Box<dyn Any+Send>>)
+            Panic
         }
 
         // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
@@ -801,7 +800,7 @@ impl Scheduler {
                 QueueState::Suspended   => RunAction::WaitForBackground,
                 QueueState::Suspending  => RunAction::WaitForBackground,
                 QueueState::Running     => RunAction::WaitForBackground,
-                QueueState::Panicked    => RunAction::Panic(core.last_panic.take()),
+                QueueState::Panicked    => RunAction::Panic,
                 QueueState::Pending     => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
                 QueueState::Idle        => { core.state = QueueState::Running; RunAction::Immediate }
             }
@@ -811,14 +810,7 @@ impl Scheduler {
             RunAction::Immediate            => self.sync_immediate(queue, job),
             RunAction::DrainOnThisThread    => self.sync_drain(queue, job),
             RunAction::WaitForBackground    => self.sync_background(queue, job),
-
-            RunAction::Panic(last_panic)    => {
-                if let Some(last_panic) = last_panic {
-                    panic::resume_unwind(last_panic);
-                }
-
-                panic!("Cannot schedule new jobs on a panicked queue")
-            }
+            RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
         }
     }
 }
