@@ -271,7 +271,7 @@ where   Core:       'static+Send,
                 // Read the current status of the stream
                 let process         = Arc::clone(&process);
                 let next            = input_stream.poll();
-                let mut next_item;
+                let next_item;
 
                 // Work out what the next item to pass to the process function should be
                 match next {
