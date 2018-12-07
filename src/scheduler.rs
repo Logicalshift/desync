@@ -466,6 +466,7 @@ impl Scheduler {
     /// in the specified queue and as soon as a thread is available to run it.
     ///
     #[inline]
+    #[deprecated(since="0.3.0", note="please use `desync` instead")]
     pub fn r#async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
         self.desync(queue, job)
     }
@@ -856,6 +857,7 @@ pub fn queue() -> Arc<JobQueue> {
 /// Performs an action asynchronously on the specified queue
 ///
 #[inline]
+#[deprecated(since="0.3.0", note="please use `desync` instead")]
 pub fn r#async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
     desync(queue, job)
 }

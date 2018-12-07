@@ -59,6 +59,7 @@ impl<T: 'static+Send> Desync<T> {
     /// performed synchronously with respect to this object.
     ///
     #[inline]
+    #[deprecated(since="0.3.0", note="please use `desync` instead")]
     pub fn r#async<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         self.desync(job)
