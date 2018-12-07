@@ -25,7 +25,7 @@
 //! # 
 //! use futures::sync::mpsc;
 //! use futures::executor;
-//! use desync::*;
+//! # use ::desync::*;
 //! 
 //! let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
 //! let (sender, receiver)  = mpsc::channel(5);
@@ -205,7 +205,7 @@ where   Core:       'static+Send,
 /// # 
 /// use futures::sync::mpsc;
 /// use futures::executor;
-/// use desync::*;
+/// # use ::desync::*;
 /// 
 /// let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
 /// let (sender, receiver)  = mpsc::channel::<String>(5);
