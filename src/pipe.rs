@@ -88,7 +88,7 @@ impl<Core: 'static+Send> Drop for LazyDrop<Core> {
     fn drop(&mut self) {
         // Drop the reference down the chute (this ensures that if the Arc<Desync<X>> is freed, it won't block the monitor pipe when the contained Desync synchronises during drop)
         let reference = self.reference.take();
-        REFERENCE_CHUTE.async(move |_| mem::drop(reference));
+        REFERENCE_CHUTE.desync(move |_| mem::drop(reference));
     }
 }
 
@@ -144,7 +144,7 @@ where   Core:       'static+Send,
                         let when_ready = task::current();
 
                         // Process the value on the stream
-                        desync.async(move |core| {
+                        desync.desync(move |core| {
                             {
                                 let mut process = process.lock().unwrap();
                                 let process     = &mut *process;
@@ -163,7 +163,7 @@ where   Core:       'static+Send,
                         let when_ready = task::current();
 
                         // Process the error on the stream
-                        desync.async(move |core| {
+                        desync.desync(move |core| {
                             {
                                 let mut process = process.lock().unwrap();
                                 let process     = &mut *process;
@@ -282,7 +282,7 @@ where   Core:       'static+Send,
                     Ok(Async::Ready(None)) => { 
                         let when_closed = task::current();
 
-                        desync.async(move |_core| {
+                        desync.desync(move |_core| {
                             // Mark the target stream as closed
                             let notify = {
                                 let mut stream_core = stream_core.lock().unwrap();
@@ -307,7 +307,7 @@ where   Core:       'static+Send,
 
                 // Send the next item to be processed
                 let when_finished = task::current();
-                desync.async(move |core| {
+                desync.desync(move |core| {
                     // Process the next item
                     let mut process     = process.lock().unwrap();
                     let process         = &mut *process;

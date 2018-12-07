@@ -14,20 +14,20 @@
 //! 
 //! A `JobQueue` allows jobs to be scheduled in the background. Jobs are scheduled in the order
 //! that they arrive, so anything on a queue is run synchronously with respect to the queue
-//! itself. The `async` call can be used to schedule stuff:
+//! itself. The `desync` call can be used to schedule work:
 //! 
 //! ```
 //! # use desync::scheduler;
 //! # 
 //! # let queue = scheduler::queue();
 //! # 
-//! scheduler::async(&queue, || println!("First job"));
-//! scheduler::async(&queue, || println!("Second job"));
-//! scheduler::async(&queue, || println!("Third job"));
+//! scheduler::desync(&queue, || println!("First job"));
+//! scheduler::desync(&queue, || println!("Second job"));
+//! scheduler::desync(&queue, || println!("Third job"));
 //! ```
 //! 
 //! These will be scheduled onto background threads created by the scheduler. There is also a
-//! `sync` method. Unlike `async`, this can return a value from the job function it takes
+//! `sync` method. Unlike `desync`, this can return a value from the job function it takes
 //! as a parameter and doesn't return until its job has completed:
 //! 
 //! ```
@@ -35,13 +35,13 @@
 //! # 
 //! # let queue = scheduler::queue();
 //! #
-//! scheduler::async(&queue, || println!("In the background"));
+//! scheduler::desync(&queue, || println!("In the background"));
 //! let someval = scheduler::sync(&queue, || { println!("In the foreground"); 42 });
 //! # assert!(someval == 42);
 //! ```
 //! 
 //! As queues are synchronous with themselves, it's possible to access data without needing
-//! extra synchronisation primitives: `async` is perfect for updating data in the background
+//! extra synchronisation primitives: `desync` is perfect for updating data in the background
 //! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
@@ -465,7 +465,16 @@ impl Scheduler {
     /// Schedules a job on this scheduler, which will run after any jobs that are already 
     /// in the specified queue and as soon as a thread is available to run it.
     ///
-    pub fn async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
+    #[inline]
+    pub fn r#async<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
+        self.desync(queue, job)
+    }
+
+    ///
+    /// Schedules a job on this scheduler, which will run after any jobs that are already 
+    /// in the specified queue and as soon as a thread is available to run it.
+    ///
+    pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
         enum ScheduleState {
             Idle,
             Running,
@@ -520,7 +529,7 @@ impl Scheduler {
     where TFn: 'static+Send+FnOnce() -> Item {
         let (send, receive) = oneshot::channel();
 
-        self.async(queue, move || {
+        self.desync(queue, move || {
             let res = job();
             send.send(res).ok();
         });
@@ -575,7 +584,7 @@ impl Scheduler {
         let (suspended, will_be_suspended)  = oneshot::channel();
         let to_suspend                      = queue.clone();
 
-        self.async(queue, move || {
+        self.desync(queue, move || {
             // Mark the queue as suspending
             let mut core = to_suspend.core.lock().expect("JobQueue core lock");
 
@@ -846,8 +855,16 @@ pub fn queue() -> Arc<JobQueue> {
 ///
 /// Performs an action asynchronously on the specified queue
 ///
-pub fn async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
-    scheduler().async(queue, job)
+#[inline]
+pub fn r#async<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
+    desync(queue, job)
+}
+
+///
+/// Performs an action asynchronously on the specified queue
+///
+pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn) {
+    scheduler().desync(queue, job)
 }
 
 ///

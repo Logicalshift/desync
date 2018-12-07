@@ -20,7 +20,7 @@ fn suspend_queue() {
             // Send the current position when the async methods run
             let pos2 = pos.clone();
             let tx2 = tx.clone();
-            async(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
+            desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
             // Suspend after the first send
             scheduler.suspend(&queue);
@@ -28,7 +28,7 @@ fn suspend_queue() {
             // Send agin
             let pos2 = pos.clone();
             let tx2 = tx.clone();
-            async(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
+            desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
             // Wait for the first queue to send
             assert!(rx.recv().unwrap() == 0);
@@ -56,7 +56,7 @@ fn suspend_queue_with_local_drain() {
         let queue = scheduler.create_job_queue();
         
         // Job so there's something to drain
-        scheduler.async(&queue, ||{});
+        scheduler.desync(&queue, ||{});
         scheduler.suspend(&queue);
 
         // Resume after a delay
@@ -85,11 +85,11 @@ fn resume_before_suspend() {
 
             // Increment the position, suspend the queue, increment it again
             let tx2         = tx.clone();
-            async(&queue, move || { tx2.send(1).unwrap(); });
+            desync(&queue, move || { tx2.send(1).unwrap(); });
             scheduler.resume(&queue);
             scheduler.suspend(&queue);
             let tx2         = tx.clone();
-            async(&queue, move || { tx2.send(2).unwrap(); });
+            desync(&queue, move || { tx2.send(2).unwrap(); });
 
             assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(1));
             assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(2));
@@ -107,10 +107,10 @@ fn safe_to_drop_suspended_queue() {
 
         // Increment the position, suspend the queue, increment it again
         let pos2        = pos.clone();
-        async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+        desync(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
         scheduler.suspend(&queue);
         let pos2        = pos.clone();
-        async(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
+        desync(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
         // Wait for long enough for these events to take place and check the queue
         while *pos.lock().unwrap() == 0 {

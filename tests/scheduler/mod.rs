@@ -1,7 +1,7 @@
 pub mod timeout;
 
 mod sync;
-mod async;
+mod asynchronous;
 mod future;
 mod suspend;
 mod thread_management;

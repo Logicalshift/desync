@@ -22,7 +22,7 @@ so they can run in parallel.
 
 ```Rust
 let number = Desync::new(0);
-number.async(|val| {
+number.desync(|val| {
     // Long update here
     thread::sleep(Duration::from_millis(100));
     *val = 42;
@@ -46,7 +46,7 @@ long-running operations.
 # Working with futures
 
 Desync has support for the `futures` library. The simplest operation is `future()`, which creates
-a future that runs asynchronously on a `Desync` object but - unlike `async()` can return a result.
+a future that runs asynchronously on a `Desync` object but - unlike `desync()` can return a result.
 It works like this:
 
 ```Rust

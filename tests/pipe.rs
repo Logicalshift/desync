@@ -80,7 +80,7 @@ fn pipe_through() {
     assert!(pipe_out.wait_stream() == Some(Ok(43)));
 
     // Changing the value should change the output
-    obj.async(|core| *core = 2);
+    obj.desync(|core| *core = 2);
 
     sender.wait_send(42).unwrap();
     assert!(pipe_out.wait_stream() == Some(Ok(44)));

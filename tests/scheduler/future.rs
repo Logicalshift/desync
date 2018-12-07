@@ -37,7 +37,7 @@ fn wait_for_future() {
 
         // Start by sending '1' from an async
         let tx2 = tx.clone();
-        async(&queue, move || { tx2.send(1).unwrap(); });
+        desync(&queue, move || { tx2.send(1).unwrap(); });
 
         // Then send the value sent via our oneshot using a future
         let tx2 = tx.clone();
@@ -46,7 +46,7 @@ fn wait_for_future() {
 
         // Then send '3'
         let tx2 = tx.clone();
-        async(&queue, move || { tx2.send(3).unwrap(); });
+        desync(&queue, move || { tx2.send(3).unwrap(); });
 
         // '1' should be available, but we should otherwise be blocked on the future
         assert!(rx.recv().unwrap() == 1);
@@ -79,7 +79,7 @@ fn future_waits_for_us() {
 
         // Start by sending '1' from an async
         let tx2 = tx.clone();
-        async(&queue, move || { thread::sleep(Duration::from_millis(100)); tx2.send(1).unwrap(); });
+        desync(&queue, move || { thread::sleep(Duration::from_millis(100)); tx2.send(1).unwrap(); });
 
         // Then send the value sent via our oneshot using a future
         let tx2 = tx.clone();
@@ -88,7 +88,7 @@ fn future_waits_for_us() {
 
         // Then send '3'
         let tx2 = tx.clone();
-        async(&queue, move || { tx2.send(3).unwrap(); });
+        desync(&queue, move || { tx2.send(3).unwrap(); });
 
         // Send '2' to the future
         future_tx.send(2).unwrap();

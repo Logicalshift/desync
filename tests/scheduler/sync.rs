@@ -41,7 +41,7 @@ fn reschedule_after_immediate_sync() {
         let queue_ref   = queue.clone();
 
         let new_val = sync(&queue, move || {
-            async(&queue_ref, move || {
+            desync(&queue_ref, move || {
                 tx.send(43).unwrap();
             });
 
@@ -60,7 +60,7 @@ fn schedule_sync_after_async() {
         let queue       = queue();
 
         let async_val = val.clone();
-        async(&queue, move || {
+        desync(&queue, move || {
             thread::sleep(Duration::from_millis(100));
             *async_val.lock().unwrap() = 42;
         });
@@ -89,7 +89,7 @@ fn sync_drains_with_no_threads() {
         scheduler.despawn_threads_if_overloaded();
 
         let async_val = val.clone();
-        scheduler.async(&queue, move || {
+        scheduler.desync(&queue, move || {
             thread::sleep(Duration::from_millis(100));
             *async_val.lock().unwrap() = 42;
         });

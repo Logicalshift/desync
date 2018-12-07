@@ -35,7 +35,7 @@ fn retrieve_data_into_local_var() {
 fn update_data_asynchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
-    desynced.async(|data| {
+    desynced.desync(|data| {
         sleep(Duration::from_millis(100));
         data.val = 42;
     });
@@ -49,10 +49,10 @@ fn update_data_asynchronously_1000_times() {
         timeout(|| {
             let desynced = Desync::new(TestData { val: 0 });
 
-            desynced.async(|data| {
+            desynced.desync(|data| {
                 data.val = 42;
             });
-            desynced.async(|data| {
+            desynced.desync(|data| {
                 data.val = 43;
             });
             
@@ -68,7 +68,7 @@ fn update_data_with_future() {
 
         let desynced = Desync::new(TestData { val: 0 });
 
-        desynced.async(|data| {
+        desynced.desync(|data| {
             sleep(Duration::from_millis(100));
             data.val = 42;
         });
@@ -90,10 +90,10 @@ fn update_data_with_future_1000_times() {
         timeout(|| {
             let desynced = Desync::new(TestData { val: 0 });
 
-            desynced.async(|data| {
+            desynced.desync(|data| {
                 data.val = 42;
             });
-            desynced.async(|data| {
+            desynced.desync(|data| {
                 data.val = 43;
             });
 
@@ -108,11 +108,11 @@ fn update_data_with_future_1000_times() {
 fn dropping_while_running_isnt_obviously_bad() {
     let desynced = Desync::new(TestData { val: 0 });
 
-    desynced.async(|data| {
+    desynced.desync(|data| {
         sleep(Duration::from_millis(100));
         data.val = 42;
     });
-    desynced.async(|data| {
+    desynced.desync(|data| {
         sleep(Duration::from_millis(100));
         data.val = 42;
     });
@@ -131,7 +131,7 @@ fn wait_for_future() {
         let (future_tx, future_rx)  = oneshot::channel();
 
         // First value 0 -> 1
-        desynced.async(|val| { 
+        desynced.desync(|val| { 
             // Sleep here so the future should be waiting for us
             sleep(Duration::from_millis(100));
             assert!(*val == 0);
@@ -148,7 +148,7 @@ fn wait_for_future() {
         });
 
         // Finally, 3
-        desynced.async(move |val| { assert!(*val == 2); *val = 3 });
+        desynced.desync(move |val| { assert!(*val == 2); *val = 3 });
 
         // Send '2' to the future
         future_tx.send(2).unwrap();

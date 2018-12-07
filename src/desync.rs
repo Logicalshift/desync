@@ -58,13 +58,27 @@ impl<T: 'static+Send> Desync<T> {
     /// Jobs are always performed in the order that they are queued and are always
     /// performed synchronously with respect to this object.
     ///
-    pub fn async<TFn>(&self, job: TFn)
+    #[inline]
+    pub fn r#async<TFn>(&self, job: TFn)
+    where TFn: 'static+Send+FnOnce(&mut T) -> () {
+        self.desync(job)
+    }
+
+    ///
+    /// Performs an operation asynchronously on this item. This function will return
+    /// immediately and the job will happen on a separate thread at some time in the
+    /// future (generally fairly soon).
+    /// 
+    /// Jobs are always performed in the order that they are queued and are always
+    /// performed synchronously with respect to this object.
+    ///
+    pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         unsafe {
             // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
             let data = DataRef(&*self.data);
 
-            async(&self.queue, move || {
+            desync(&self.queue, move || {
                 let data = data.0 as *mut T;
                 job(&mut *data);
             })
@@ -99,7 +113,7 @@ impl<T: 'static+Send> Desync<T> {
     where TFn: 'static+Send+FnOnce(&mut T) -> Item {
         let (send, receive) = oneshot::channel();
 
-        self.async(|data| {
+        self.desync(|data| {
             let result = job(data);
 
             if let Err(e) = send.send(result) {
