@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-desync = "0.2"
+desync = "0.3"
 ```
 
 Desync provides a single type, `Desync<T>` that can be used to replace both threads and mutexes.
