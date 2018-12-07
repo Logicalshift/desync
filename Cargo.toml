@@ -13,7 +13,7 @@ keywords        = ["async", "futures", "concurrency"]
 categories      = ["concurrency","asynchronous","algorithms","data-structures"]
 
 [dependencies]
-lazy_static     = "0.2"
+lazy_static     = "1.2"
 futures         = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
