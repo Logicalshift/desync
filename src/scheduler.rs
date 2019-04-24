@@ -526,7 +526,7 @@ impl Scheduler {
     ///
     /// Schedules a job to run and returns a future for retrieving the result
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> Box<dyn Future<Item=Item, Error=oneshot::Canceled>+Send>
+    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Item=Item, Error=oneshot::Canceled>+Send
     where TFn: 'static+Send+FnOnce() -> Item {
         let (send, receive) = oneshot::channel();
 
@@ -535,14 +535,14 @@ impl Scheduler {
             send.send(res).ok();
         });
 
-        Box::new(receive)
+        receive
     }
 
     ///
     /// Pauses a queue until a particular future has completed, before performing a
     /// task with the result of that future
     ///
-    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> Box<dyn 'a+Future<Item=Res, Error=Error>> 
+    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Item=Res, Error=Error>+Send 
     where TFn: 'static+Send+FnOnce(Result<Item, Error>) -> Result<Res, Error> {
         // Suspend the queue
         let after_suspend = self.suspend(queue).map_err(|e| (None, Some(e)));
@@ -575,13 +575,13 @@ impl Scheduler {
             future::result(result)
         });
 
-        Box::new(next_future)
+        next_future
     }
 
     ///
     /// Requests that a queue be suspended once it has finished all of its active jobs
     ///
-    pub fn suspend(&self, queue: &Arc<JobQueue>) -> Box<dyn Future<Item=(), Error=oneshot::Canceled>+Send> {
+    pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Item=(), Error=oneshot::Canceled>+Send {
         let (suspended, will_be_suspended)  = oneshot::channel();
         let to_suspend                      = queue.clone();
 
@@ -603,7 +603,7 @@ impl Scheduler {
             }
         });
 
-        Box::new(will_be_suspended)
+        will_be_suspended
     }
 
     ///
@@ -872,7 +872,7 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 ///
 /// Schedules a job to run and returns a future for retrieving the result
 ///
-pub fn future<TFn, Item: 'static+Send>(queue: &Arc<JobQueue>, job: TFn) -> Box<dyn Future<Item=Item, Error=oneshot::Canceled>+Send>
+pub fn future<TFn, Item: 'static+Send>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Item=Item, Error=oneshot::Canceled>+Send
 where TFn: 'static+Send+FnOnce() -> Item {
     scheduler().future(queue, job)
 }
