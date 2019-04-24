@@ -110,7 +110,7 @@ impl<T: 'static+Send> Desync<T> {
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<dyn Future<Item=Item, Error=oneshot::Canceled>>
+    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> Box<dyn Future<Item=Item, Error=oneshot::Canceled>+Send>
     where TFn: 'static+Send+FnOnce(&mut T) -> Item {
         let (send, receive) = oneshot::channel();
 
