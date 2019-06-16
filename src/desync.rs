@@ -117,8 +117,8 @@ impl<T: 'static+Send> Desync<T> {
         self.desync(|data| {
             let result = job(data);
 
-            if let Err(e) = send.send(result) {
-                panic!(e);
+            if let Err(_result) = send.send(result) {
+                // The listening side disconnected: we'll throw away the result and act like a normal desync instead
             }
         });
 
