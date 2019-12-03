@@ -57,7 +57,7 @@ use std::sync::*;
 use std::collections::vec_deque::*;
 
 use futures::future;
-use futures::sync::oneshot;
+use futures::channel::oneshot;
 use futures::future::Future;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -542,8 +542,8 @@ impl Scheduler {
     /// Pauses a queue until a particular future has completed, before performing a
     /// task with the result of that future
     ///
-    pub fn after<'a, TFn, Item: 'static+Send, Error: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Item=Item, Error=Error>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Item=Res, Error=Error>+Send 
-    where TFn: 'static+Send+FnOnce(Result<Item, Error>) -> Result<Res, Error> {
+    pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Output=Item>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Output=Res>+Send 
+    where TFn: 'static+Send+FnOnce(Item) -> Res {
         // Suspend the queue
         let after_suspend = self.suspend(queue).map_err(|e| (None, Some(e)));
 
@@ -572,7 +572,7 @@ impl Scheduler {
             // TODO: we always re-queue on the main scheduler here
             let result = job(val);
             scheduler().resume(&future_queue);
-            future::result(result)
+            future::ready(result)
         });
 
         next_future
