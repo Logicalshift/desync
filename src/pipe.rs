@@ -107,14 +107,12 @@ impl<Core: 'static+Send> Drop for LazyDrop<Core> {
 /// 
 pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn)
 where   Core:       'static+Send,
-        S:          'static+Send+Stream,
+        S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> () {
 
-    pin_mut!(stream);
-
     // Need a mutable version of the stream
-    let mut stream = stream;
+    let mut stream = Box::new(stream);
 
     // We stop processing once the desync object is no longer used anywhere else
     let desync = Arc::downgrade(&desync);
@@ -133,7 +131,7 @@ where   Core:       'static+Send,
 
                 // Read the current status of the stream
                 let process     = Arc::clone(&process);
-                let next        = stream.poll_next(context);
+                let next        = stream.poll_next_unpin(context);
 
                 match next {
                     // Just wait if the stream is not ready
@@ -213,16 +211,14 @@ where   Core:       'static+Send,
 /// 
 pub fn pipe<Core, S, Output, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output>
 where   Core:       'static+Send,
-        S:          'static+Send+Stream,
+        S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
         Output:     'static+Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> Output {
 
     // Fetch the input stream and prepare the process function for async calling
-    let mut input_stream    = stream;
+    let mut input_stream    = Box::new(stream);
     let process             = Arc::new(Mutex::new(process));
-
-    pin_mut!(input_stream);
 
     // Create the output stream
     let output_stream   = PipeStream::new();
@@ -257,7 +253,7 @@ where   Core:       'static+Send,
 
                 // Read the current status of the stream
                 let process         = Arc::clone(&process);
-                let next            = input_stream.poll_next(context);
+                let next            = (*input_stream).poll_next_unpin(context);
                 let next_item;
 
                 // Work out what the next item to pass to the process function should be
@@ -471,7 +467,7 @@ impl PipeNotify {
         // Poll for the next result
         self.future.sync(|maybe_future| {
             // Take ownership of the future
-            let future = maybe_future.take();
+            let mut future = maybe_future.take();
 
             // Poll for the next result
             match future.as_mut().map(|future| future.poll_unpin(context)) {
