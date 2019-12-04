@@ -49,7 +49,6 @@ use futures::task::{Spawn, Poll, Context};
 use std::mem;
 use std::sync::*;
 use std::ops::Deref;
-use std::result::Result;
 use std::collections::VecDeque;
 
 lazy_static! {
@@ -207,7 +206,7 @@ where   Core:       'static+Send,
 /// assert!(value_inserted.wait_stream() == Some(Ok(("Test".to_string(), false))));
 /// ```
 /// 
-pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output, OutputErr>
+pub fn pipe<Core, S, Output, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output>
 where   Core:       'static+Send,
         S:          'static+Send+Stream,
         S::Item:    Send,
