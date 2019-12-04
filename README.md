@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-desync = "0.3"
+desync = "0.5"
 ```
 
 Desync provides a single type, `Desync<T>` that can be used to replace both threads and mutexes.
@@ -51,7 +51,7 @@ It works like this:
 
 ```Rust
 let future_number = number.future(|val| *val);
-assert!(executor::spawn(future_number).wait_future().unwrap() == 42);
+assert!(executor::block_on(async { future_number.await.unwrap() == 42 }))
 ```
 
 There is also support for streams, via the `pipe_in()` and `pipe()` functions. These work on
@@ -63,8 +63,8 @@ using message-passing for communication.
 let some_object = Arc::new(Desync::new(some_object));
 
 pipe_in(Arc::clone(&number), some_stream, 
-    |some_object, input| input.map(|input| some_object.process(input)));
+    |some_object, input| some_object.process(input));
 
 let output_stream = pipe(Arc::clone(&number), some_stream, 
-    |some_object, input| input.map(|input| some_object.process_with_output(input)));
+    |some_object, input| some_object.process_with_output(input));
 ```

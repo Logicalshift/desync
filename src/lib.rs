@@ -72,7 +72,7 @@
 //! #     *val = 42;
 //! # });
 //! let future_number = number.future(|val| *val);
-//! assert!(executor::spawn(future_number).wait_future().unwrap() == 42);
+//! assert!(executor::block_on(async { future_number.await.unwrap() == 42 }));
 //! # }
 //! ```
 //! 
