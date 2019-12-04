@@ -43,7 +43,7 @@
 use super::desync::*;
 
 use futures::*;
-use futures::future::{Future};
+use futures::future::{FutureObj};
 use futures::stream::{Stream};
 use futures::task;
 use futures::task::{Poll, Context};
@@ -110,6 +110,8 @@ where   Core:       'static+Send,
         S:          'static+Send+Stream,
         S::Item:    Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> () {
+
+    pin_mut!(stream);
 
     // Need a mutable version of the stream
     let mut stream = stream;
@@ -215,10 +217,12 @@ where   Core:       'static+Send,
         S::Item:    Send,
         Output:     'static+Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> Output {
-    
+
     // Fetch the input stream and prepare the process function for async calling
     let mut input_stream    = stream;
     let process             = Arc::new(Mutex::new(process));
+
+    pin_mut!(input_stream);
 
     // Create the output stream
     let output_stream   = PipeStream::new();
@@ -253,7 +257,7 @@ where   Core:       'static+Send,
 
                 // Read the current status of the stream
                 let process         = Arc::clone(&process);
-                let next            = input_stream.poll(context);
+                let next            = input_stream.poll_next(context);
                 let next_item;
 
                 // Work out what the next item to pass to the process function should be
@@ -424,8 +428,8 @@ struct PipeMonitor {
 ///
 /// Provides the 'Notify' interface for a polling function with a particular ID
 /// 
-struct PipeNotify<MonitorFuture: Send> {
-    future: Arc<Desync<Option<MonitorFuture>>>
+struct PipeNotify {
+    future: Arc<Desync<Option<FutureObj<'static, ()>>>>
 }
 
 impl PipeMonitor {
@@ -445,6 +449,7 @@ impl PipeMonitor {
     where PollFn: 'static+Send+FnMut(&mut Context) -> Poll<()> {
         // Turn the polling function into a future (it will complete when monitoring is complete)
         let poll_fn     = future::poll_fn(poll_fn);
+        let poll_fn     = FutureObj::new(Box::new(poll_fn));
         let poll_fn     = Arc::new(Desync::new(Some(poll_fn)));
 
         // Create a notifier that will act as the context for this polling operation
@@ -461,8 +466,7 @@ impl PipeMonitor {
     }
 }
 
-impl<MonitorFuture> PipeNotify<MonitorFuture>
-where MonitorFuture: 'static+Send+Future<Output=()> {
+impl PipeNotify {
     fn poll(&self, context: &mut Context) {
         // Poll for the next result
         self.future.sync(|maybe_future| {
@@ -470,7 +474,7 @@ where MonitorFuture: 'static+Send+Future<Output=()> {
             let future = maybe_future.take();
 
             // Poll for the next result
-            match future.map(|future| future.poll(context)) {
+            match future.as_mut().map(|future| future.poll_unpin(context)) {
                 // Stop if the future completes (keep the polling function so it's deallocated)
                 None | Some(Poll::Ready(())) => { }
 
@@ -481,9 +485,8 @@ where MonitorFuture: 'static+Send+Future<Output=()> {
     }
 }
 
-impl<MonitorFuture> task::ArcWake for PipeNotify<MonitorFuture>
-where MonitorFuture: 'static+Send+Future<Output=()> {
-    fn wake_by_ref(arc_self: &Arc<PipeNotify<MonitorFuture>>) {
+impl task::ArcWake for PipeNotify {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
         let waker       = task::waker_ref(arc_self);
         let mut context = Context::from_waker(&waker);
 
