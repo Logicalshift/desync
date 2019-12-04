@@ -43,8 +43,8 @@
 use super::desync::*;
 
 use futures::*;
-use futures::executor;
-use futures::executor::Spawn;
+use futures::task;
+use futures::task::{Spawn, Poll, Context};
 
 use std::mem;
 use std::sync::*;
@@ -107,8 +107,7 @@ pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process
 where   Core:       'static+Send,
         S:          'static+Send+Stream,
         S::Item:    Send,
-        S::Error:   Send,
-        ProcessFn:  'static+Send+FnMut(&mut Core, Result<S::Item, S::Error>) -> () {
+        ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> () {
 
     // Need a mutable version of the stream
     let mut stream = stream;
@@ -121,7 +120,7 @@ where   Core:       'static+Send,
     let process = Arc::new(Mutex::new(process));
 
     // Monitor the stream
-    PIPE_MONITOR.monitor(move || {
+    PIPE_MONITOR.monitor(move |context| {
         loop {
             let desync = desync.upgrade();
 
@@ -134,14 +133,14 @@ where   Core:       'static+Send,
 
                 match next {
                     // Just wait if the stream is not ready
-                    Ok(Async::NotReady) => { return Ok(Async::NotReady); },
+                    Poll::Pending => { return Poll::Pending; },
 
                     // Stop processing when the stream is finished
-                    Ok(Async::Ready(None)) => { return Ok(Async::Ready(())); }
+                    Poll::Ready(None) => { return Poll::Ready(()); }
 
                     // Stream returned a value
-                    Ok(Async::Ready(Some(next))) => {
-                        let when_ready = task::current();
+                    Poll::Ready(Some(next)) => {
+                        let when_ready = context.waker().clone();
 
                         // Process the value on the stream
                         desync.desync(move |core| {
@@ -151,32 +150,16 @@ where   Core:       'static+Send,
                                 process(core, Ok(next));
                             }
 
-                            when_ready.notify();
+                            when_ready.wake();
                         });
 
                         // Wake again when the processing finishes
-                        return Ok(Async::NotReady);
-                    },
-
-                    // Stream returned an error
-                    Err(e) => {
-                        let when_ready = task::current();
-
-                        // Process the error on the stream
-                        desync.desync(move |core| {
-                            {
-                                let mut process = process.lock().unwrap();
-                                let process     = &mut *process;
-                                process(core, Err(e));
-                            }
-
-                            when_ready.notify()
-                        });
+                        return Poll::Pending;
                     },
                 }
             } else {
                 // The desync target is no longer available - indicate that we've completed monitoring
-                return Ok(Async::Ready(()));
+                return Poll::Ready(());
             }
         }
     });
@@ -228,10 +211,8 @@ pub fn pipe<Core, S, Output, OutputErr, ProcessFn>(desync: Arc<Desync<Core>>, st
 where   Core:       'static+Send,
         S:          'static+Send+Stream,
         S::Item:    Send,
-        S::Error:   Send,
         Output:     'static+Send,
-        OutputErr:  'static+Send,
-        ProcessFn:  'static+Send+FnMut(&mut Core, Result<S::Item, S::Error>) -> Result<Output, OutputErr> {
+        ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> Output {
     
     // Fetch the input stream and prepare the process function for async calling
     let mut input_stream    = stream;
@@ -243,7 +224,7 @@ where   Core:       'static+Send,
     let stream_core     = Arc::downgrade(&stream_core);
 
     // Monitor the input stream and pass data to the output stream
-    PIPE_MONITOR.monitor(move || {
+    PIPE_MONITOR.monitor(move |context| {
         loop {
             let stream_core = stream_core.upgrade();
 
@@ -256,31 +237,31 @@ where   Core:       'static+Send,
                     // If the pending queue is full, then stop processing events
                     if stream_core.pending.len() >= stream_core.max_pipe_depth {
                         // Wake when the stream accepts some input
-                        stream_core.backpressure_release_notify = Some(task::current());
+                        stream_core.backpressure_release_notify = Some(context.waker().clone());
 
                         // Go back to sleep without reading from the stream
-                        return Ok(Async::NotReady);
+                        return Poll::Pending;
                     }
 
                     // If the core is closed, finish up
                     if stream_core.closed {
-                        return Ok(Async::Ready(()));
+                        return Poll::Ready(());
                     }
                 }
 
                 // Read the current status of the stream
                 let process         = Arc::clone(&process);
-                let next            = input_stream.poll();
+                let next            = input_stream.poll(context);
                 let next_item;
 
                 // Work out what the next item to pass to the process function should be
                 match next {
                     // Just wait if the stream is not ready
-                    Ok(Async::NotReady) => { return Ok(Async::NotReady); },
+                    Poll::Pending => { return Poll::Pending; },
 
                     // Stop processing when the input stream is finished
-                    Ok(Async::Ready(None)) => { 
-                        let when_closed = task::current();
+                    Poll::Ready(None) => { 
+                        let when_closed = context.waker().clone();
 
                         desync.desync(move |_core| {
                             // Mark the target stream as closed
@@ -289,24 +270,21 @@ where   Core:       'static+Send,
                                 stream_core.closed = true;
                                 stream_core.notify.take()
                             };
-                            notify.map(|notify| notify.notify());
+                            notify.map(|notify| notify.wake());
 
-                            when_closed.notify();
+                            when_closed.wake();
                         });
 
                         // Pipe has finished. We return not ready here and finish up once the closed event fires
-                        return Ok(Async::NotReady);
+                        return Poll::Pending;
                     }
 
                     // Stream returned a value
-                    Ok(Async::Ready(Some(next))) => next_item = Ok(next),
-
-                    // Stream returned an error
-                    Err(e) => next_item = Err(e),
+                    Poll::Ready(Some(next)) => next_item = next
                 }
 
                 // Send the next item to be processed
-                let when_finished = task::current();
+                let when_finished = context.waker().clone();
                 desync.desync(move |core| {
                     // Process the next item
                     let mut process     = process.lock().unwrap();
@@ -320,17 +298,17 @@ where   Core:       'static+Send,
                         stream_core.pending.push_back(next_item);
                         stream_core.notify.take()
                     };
-                    notify.map(|notify| notify.notify());
+                    notify.map(|notify| notify.wake());
 
-                    when_finished.notify();
+                    when_finished.wake();
                 });
 
                 // Poll again when the task is complete
-                return Ok(Async::NotReady);
+                return Poll::Pending;
 
             } else {
                 // We stop processing once nothing is reading from the target stream
-                return Ok(Async::Ready(()));
+                return Poll::Ready(());
             }
         }
     });
@@ -353,10 +331,10 @@ struct PipeStreamCore<Item, Error>  {
     closed: bool,
 
     /// The task to notify when the stream changes
-    notify: Option<task::Task>,
+    notify: Option<task::Waker>,
 
     /// The task to notify when we reduce the amount of pending data
-    backpressure_release_notify: Option<task::Task>
+    backpressure_release_notify: Option<task::Waker>
 }
 
 ///
@@ -490,7 +468,7 @@ impl PipeMonitor {
     /// notification system (ie, can call things like the stream poll function)
     /// 
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
-    where PollFn: 'static+Send+FnMut() -> Poll<(), ()> {
+    where PollFn: 'static+Send+FnMut(&mut Context) -> Poll<()> {
         // Turn the polling function into a future (it will complete when monitoring is complete)
         let poll_fn     = future::poll_fn(poll_fn);
 
