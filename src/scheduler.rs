@@ -526,7 +526,7 @@ impl Scheduler {
     ///
     /// Schedules a job to run and returns a future for retrieving the result
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Item=Item, Error=oneshot::Canceled>+Send
+    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<Item, oneshot::Canceled>>+Send
     where TFn: 'static+Send+FnOnce() -> Item {
         let (send, receive) = oneshot::channel();
 
