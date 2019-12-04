@@ -58,7 +58,7 @@ use std::collections::vec_deque::*;
 
 use futures::future;
 use futures::channel::oneshot;
-use futures::future::Future;
+use futures::future::{Future, FutureExt};
 
 #[cfg(not(target_arch = "wasm32"))]
 use num_cpus;
@@ -545,11 +545,10 @@ impl Scheduler {
     pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Output=Item>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Output=Res>+Send 
     where TFn: 'static+Send+FnOnce(Item) -> Res {
         // Suspend the queue
-        let after_suspend = self.suspend(queue).map_err(|e| (None, Some(e)));
+        let after_suspend = self.suspend(queue);
 
         // Create a future that completes after we suspend and after our next future
-        let after = after.map_err(|e| (Some(e), None))
-            .join(after_suspend);
+        let after = future::join(after_suspend, after);
 
         // Resume it after the future completes
         let future_queue    = queue.clone();
@@ -557,14 +556,10 @@ impl Scheduler {
             // It's invalid for the suspension not to be in effect when we run our future
             let val = {
                 match val {
-                    Err((future_err, suspend_err)) => {
-                        if let Some(_suspend_err) = suspend_err {
-                            panic!("While waiting for a future: queue suspension was cancelled");
-                        } else {
-                            Err(future_err.expect("Both errors missing"))
-                        }
+                    (Err(_suspend_err), _) => {
+                        panic!("While waiting for a future: queue suspension was cancelled");
                     },
-                    Ok((val, _)) => Ok(val)
+                    (Ok(_), val) => val
                 }
             };
 
@@ -581,7 +576,7 @@ impl Scheduler {
     ///
     /// Requests that a queue be suspended once it has finished all of its active jobs
     ///
-    pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Item=(), Error=oneshot::Canceled>+Send {
+    pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Output=Result<(), oneshot::Canceled>>+Send {
         let (suspended, will_be_suspended)  = oneshot::channel();
         let to_suspend                      = queue.clone();
 
