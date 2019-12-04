@@ -6,7 +6,7 @@ use std::thread;
 use std::time::*;
 use std::sync::mpsc::*;
 
-use futures::sync::oneshot;
+use futures::channel::oneshot;
 
 #[test]
 fn schedule_future() {

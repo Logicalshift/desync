@@ -4,7 +4,9 @@ extern crate futures;
 use desync::*;
 use futures::stream;
 use futures::executor;
-use futures::sync::mpsc;
+use futures::sink::{SinkExt};
+use futures::stream::{StreamExt};
+use futures::channel::mpsc;
 
 use std::sync::*;
 use std::thread;
@@ -14,13 +16,13 @@ use std::time::Duration;
 fn pipe_in_simple_stream() {
     // Create a stream
     let stream  = vec![1, 2, 3];
-    let stream  = stream::iter_ok(stream);
+    let stream  = stream::iter(stream);
 
     // Create an object for the stream to be piped into
     let obj     = Arc::new(Desync::new(vec![]));
 
     // Pipe the stream into the object
-    pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| core.push(item));
+    pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| core.push(Ok(item)));
 
     // Delay to allow the messages to be processed on the stream
     thread::sleep(Duration::from_millis(10));
@@ -38,15 +40,17 @@ fn pipe_in_mpsc_receiver() {
     let obj = Arc::new(Desync::new(vec![]));
 
     // Add anything received to the vector via a pipe
-    pipe_in(Arc::clone(&obj), receiver, |core, item| core.push(item.unwrap()));
+    pipe_in(Arc::clone(&obj), receiver, |core, item| core.push(item));
 
     // Initially empty
     assert!(obj.sync(|core| core.clone()) == vec![]);
 
     // Send some values
-    let mut sender = executor::spawn(sender);
-    sender.wait_send(1).unwrap();
-    sender.wait_send(2).unwrap();
+    let send_values = async {
+        sender.send(1).await.unwrap();
+        sender.send(2).await.unwrap();
+    };
+    executor::block_on(send_values);
     
     // Delay to allow the messages to be processed on the stream
     // TODO: fix so this isn't needed. This happens because there's a race between when 'poll'
@@ -66,24 +70,22 @@ fn pipe_through() {
     let obj = Arc::new(Desync::new(1));
 
     // Create a pipe that adds values from the stream to the value in the object
-    let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: Result<i32, ()>| item.map(|item| item + *core));
+    let pipe_out = pipe(Arc::clone(&obj), receiver, |core, item| item + *core);
 
     // Start things running
-    let mut sender      = executor::spawn(sender);
-    let mut pipe_out    = executor::spawn(pipe_out);
+    executor::block_on(async {
+        sender.send(2).await.unwrap();
+        assert!(pipe_out.next().await == Some(3));
 
-    // Sending a value should add whatever is in the desync object
-    sender.wait_send(2).unwrap();
-    assert!(pipe_out.wait_stream() == Some(Ok(3)));
+        sender.send(42).await.unwrap();
+        assert!(pipe_out.next().await == Some(43));
 
-    sender.wait_send(42).unwrap();
-    assert!(pipe_out.wait_stream() == Some(Ok(43)));
+        // Changing the value should change the output
+        obj.desync(|core| *core = 2);
 
-    // Changing the value should change the output
-    obj.desync(|core| *core = 2);
-
-    sender.wait_send(42).unwrap();
-    assert!(pipe_out.wait_stream() == Some(Ok(44)));
+        sender.send(42).await.unwrap();
+        assert!(pipe_out.next().await == Some(43));
+    });
 }
 
 #[test]
