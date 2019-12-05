@@ -90,17 +90,23 @@ fn suspend_queue_with_local_drain() {
 fn resume_before_suspend() {
     for _x in 0..1000 {
         timeout(|| {
-            let (tx, rx)    = channel();
-            let queue       = queue();
-            let scheduler   = scheduler();
+            use futures::executor;
+            use futures::channel::oneshot;
+
+            let (tx, rx)        = channel();
+            let queue           = queue();
+            let scheduler       = scheduler();
 
             // Increment the position, suspend the queue, increment it again
-            let tx2         = tx.clone();
+            let tx2             = tx.clone();
             desync(&queue, move || { tx2.send(1).unwrap(); });
             scheduler.resume(&queue);
-            scheduler.suspend(&queue);
-            let tx2         = tx.clone();
+            let wont_suspend    = scheduler.suspend(&queue);
+            let tx2             = tx.clone();
             desync(&queue, move || { tx2.send(2).unwrap(); });
+
+            // As we resumed then suspended, the suspension gets canceled, which we can detect via the error
+            assert!(executor::block_on(wont_suspend) == Err(oneshot::Canceled));
 
             assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(1));
             assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(2));
