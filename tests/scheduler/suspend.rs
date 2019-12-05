@@ -117,6 +117,8 @@ fn resume_before_suspend() {
 #[test]
 fn safe_to_drop_suspended_queue() {
     timeout(|| {
+        use futures::executor;
+
         let queue       = queue();
         let scheduler   = scheduler();
 
@@ -125,7 +127,7 @@ fn safe_to_drop_suspended_queue() {
         // Increment the position, suspend the queue, increment it again
         let pos2        = pos.clone();
         desync(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
-        scheduler.suspend(&queue);
+        let suspended   = scheduler.suspend(&queue);
         let pos2        = pos.clone();
         desync(&queue, move || { let mut pos2 = pos2.lock().unwrap(); *pos2 += 1 });
 
@@ -134,5 +136,8 @@ fn safe_to_drop_suspended_queue() {
             thread::sleep(Duration::from_millis(100));
         }
         assert!(*pos.lock().unwrap() == 1);
+
+        // Make sure the queue is actually suspended
+        executor::block_on(suspended).unwrap();
     }, 500);
 }
