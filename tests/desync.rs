@@ -128,8 +128,8 @@ fn wait_for_future() {
         use futures::channel::oneshot;
 
         // We use a oneshot as our future, and a mpsc channel to track progress
-        let desynced = Desync::new(0);
-        let (mut future_tx, future_rx)  = oneshot::channel();
+        let desynced                = Desync::new(0);
+        let (future_tx, future_rx)  = oneshot::channel();
 
         // First value 0 -> 1
         desynced.desync(|val| { 

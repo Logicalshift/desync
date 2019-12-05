@@ -14,12 +14,14 @@ fn schedule_future() {
         use futures::executor;
 
         let queue       = queue();
-        let mut future  = executor::spawn(future(&queue, move || {
+        let future      = future(&queue, move || {
             thread::sleep(Duration::from_millis(100));
             42
-        }));
+        });
 
-        assert!(future.wait_future().unwrap() == 42);
+        executor::block_on(async {
+            assert!(future.await.unwrap() == 42);
+        });
     }, 500);
 }
 
@@ -54,14 +56,15 @@ fn wait_for_future() {
 
         // Send '2' to the future
         future_tx.send(2).unwrap();
-        let mut future  = executor::spawn(future);
 
-        // Future should resolve to 4
-        assert!(future.wait_future().unwrap() == 4);
+        executor::block_on(async {
+            // Future should resolve to 4
+            assert!(future.await.unwrap() == 4);
 
-        // Should receive the '2' from the future, then 3
-        assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
-        assert!(rx.recv().unwrap() == 3);
+            // Should receive the '2' from the future, then 3
+            assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
+            assert!(rx.recv().unwrap() == 3);
+        });
     }, 500);
 }
 
@@ -92,16 +95,17 @@ fn future_waits_for_us() {
 
         // Send '2' to the future
         future_tx.send(2).unwrap();
-        let mut future  = executor::spawn(future);
 
-        // Future should resolve to 4
-        assert!(future.wait_future().unwrap() == 4);
+        executor::block_on(async {
+            // Future should resolve to 4
+            assert!(future.await.unwrap() == 4);
 
-        // '1' should be available first
-        assert!(rx.recv().unwrap() == 1);
+            // '1' should be available first
+            assert!(rx.recv().unwrap() == 1);
 
-        // Should receive the '2' from the future, then 3
-        assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
-        assert!(rx.recv().unwrap() == 3);
+            // Should receive the '2' from the future, then 3
+            assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
+            assert!(rx.recv().unwrap() == 3);
+        });
     }, 500);
 }
