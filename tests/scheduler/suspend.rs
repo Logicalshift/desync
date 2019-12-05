@@ -11,6 +11,8 @@ use std::sync::mpsc::*;
 fn suspend_queue() {
     for _x in 0..1000 {
         timeout(|| {
+            use futures::executor;
+
             let queue           = queue();
             let scheduler       = scheduler();
             let (tx, rx)        = channel();
@@ -23,9 +25,10 @@ fn suspend_queue() {
             desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
             // Suspend after the first send
-            scheduler.suspend(&queue);
+            let suspended = scheduler.suspend(&queue);
+            executor::block_on(suspended).unwrap();
 
-            // Send agin
+            // Send again
             let pos2 = pos.clone();
             let tx2 = tx.clone();
             desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
