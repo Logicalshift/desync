@@ -20,8 +20,8 @@ fn suspend_queue() {
             let pos             = Arc::new(Mutex::new(0));
 
             // Send the current position when the async methods run
-            let pos2 = pos.clone();
-            let tx2 = tx.clone();
+            let pos2            = pos.clone();
+            let tx2             = tx.clone();
             desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
             // Suspend after the first send

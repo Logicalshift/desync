@@ -132,7 +132,7 @@ impl<T: 'static+Send> Desync<T> {
     pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Output=Item>+Send>(&self, after: Fut, job: TFn) -> impl 'a+Future<Output=Res>+Send 
     where TFn: 'static+Send+FnOnce(&mut T, Item) -> Res {
         unsafe {
-            // As drop() is the last thing called, we know that this object will still exist at the point where
+            // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
             // Also, we'll have exclusive access to this object when the callback occurs
             let data = DataRef(&*self.data);
 
