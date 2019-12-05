@@ -23,20 +23,22 @@
 //! # use std::collections::HashSet;
 //! # use std::sync::*;
 //! # 
-//! use futures::sync::mpsc;
+//! use futures::channel::mpsc;
 //! use futures::executor;
+//! use futures::prelude::*;
 //! # use ::desync::*;
 //! 
-//! let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
-//! let (sender, receiver)  = mpsc::channel(5);
+//! executor::block_on(async {
+//!     let desync_hashset          = Arc::new(Desync::new(HashSet::new()));
+//!     let (mut sender, receiver)  = mpsc::channel(5);
 //! 
-//! pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { value.map(|value| hashset.insert(value)); });
+//!     pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { hashset.insert(value); });
 //! 
-//! let mut sender = executor::spawn(sender);
-//! sender.wait_send("Test".to_string());
-//! sender.wait_send("Another value".to_string());
+//!     sender.send("Test".to_string()).await.unwrap();
+//!     sender.send("Another value".to_string()).await.unwrap();
 //! # 
-//! # assert!(desync_hashset.sync(|hashset| hashset.contains(&("Test".to_string()))))
+//! #   assert!(desync_hashset.sync(|hashset| hashset.contains(&("Test".to_string()))))
+//! });
 //! ```
 //! 
 
@@ -188,25 +190,26 @@ where   Core:       'static+Send,
 /// # use std::collections::HashSet;
 /// # use std::sync::*;
 /// # 
-/// use futures::sync::mpsc;
+/// use futures::prelude::*;
+/// use futures::channel::mpsc;
 /// use futures::executor;
 /// # use ::desync::*;
 /// 
-/// let desync_hashset      = Arc::new(Desync::new(HashSet::new()));
-/// let (sender, receiver)  = mpsc::channel::<String>(5);
+/// executor::block_on(async {
+///     let desync_hashset          = Arc::new(Desync::new(HashSet::new()));
+///     let (mut sender, receiver)  = mpsc::channel::<String>(5);
 /// 
-/// let value_inserted = pipe(Arc::clone(&desync_hashset), receiver, 
-///     |hashset, value| { value.map(|value| (value.clone(), hashset.insert(value))) });
+///     let mut value_inserted      = pipe(Arc::clone(&desync_hashset), receiver, 
+///         |hashset, value| { (value.clone(), hashset.insert(value)) });
 /// 
-/// let mut sender = executor::spawn(sender);
-/// sender.wait_send("Test".to_string());
-/// sender.wait_send("Another value".to_string());
-/// sender.wait_send("Test".to_string());
+///     sender.send("Test".to_string()).await.unwrap();
+///     sender.send("Another value".to_string()).await.unwrap();
+///     sender.send("Test".to_string()).await.unwrap();
 /// 
-/// let mut value_inserted = executor::spawn(value_inserted);
-/// assert!(value_inserted.wait_stream() == Some(Ok(("Test".to_string(), true))));
-/// assert!(value_inserted.wait_stream() == Some(Ok(("Another value".to_string(), true))));
-/// assert!(value_inserted.wait_stream() == Some(Ok(("Test".to_string(), false))));
+///     assert!(value_inserted.next().await == Some(("Test".to_string(), true)));
+///     assert!(value_inserted.next().await == Some(("Another value".to_string(), true)));
+///     assert!(value_inserted.next().await == Some(("Test".to_string(), false)));
+/// });
 /// ```
 /// 
 pub fn pipe<Core, S, Output, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output>
