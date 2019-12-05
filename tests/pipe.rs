@@ -84,7 +84,7 @@ fn pipe_through() {
         obj.desync(|core| *core = 2);
 
         sender.send(42).await.unwrap();
-        assert!(pipe_out.next().await == Some(43));
+        assert!(pipe_out.next().await == Some(44));
     });
 }
 
