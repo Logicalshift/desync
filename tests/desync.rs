@@ -73,11 +73,10 @@ fn update_data_with_future() {
             data.val = 42;
         });
 
-        let mut future = executor::spawn(desynced.future(|data| {
-            data.val
-        }));
-        
-        assert!(future.wait_future().unwrap() == 42);
+        executor::block_on(async {
+            let future = desynced.future(|data| { data.val });
+            assert!(future.await.unwrap() == 42);
+        });
     }, 500);
 }
 
@@ -97,9 +96,11 @@ fn update_data_with_future_1000_times() {
                 data.val = 43;
             });
 
-            let mut future = executor::spawn(desynced.future(|data| data.val));
-            
-            assert!(future.wait_future().unwrap() == 43);
+            executor::block_on(async {
+                let future = desynced.future(|data| data.val);
+                
+                assert!(future.await.unwrap() == 43);
+            });
         }, 500);
     }
 }
@@ -124,11 +125,11 @@ fn wait_for_future() {
     // (Because we need a future that arrives when the queue is actually suspended)
     timeout(|| {
         use futures::executor;
-        use futures::sync::oneshot;
+        use futures::channel::oneshot;
 
         // We use a oneshot as our future, and a mpsc channel to track progress
         let desynced = Desync::new(0);
-        let (future_tx, future_rx)  = oneshot::channel();
+        let (mut future_tx, future_rx)  = oneshot::channel();
 
         // First value 0 -> 1
         desynced.desync(|val| { 
@@ -144,20 +145,21 @@ fn wait_for_future() {
             *val = future_result.unwrap();
 
             // Return '4' to anything listening for this future
-            Ok(4)
+            4
         });
 
         // Finally, 3
         desynced.desync(move |val| { assert!(*val == 2); *val = 3 });
 
-        // Send '2' to the future
-        future_tx.send(2).unwrap();
-        let mut future  = executor::spawn(future);
+        executor::block_on(async {
+            // Send '2' to the future
+            future_tx.send(2).unwrap();
 
-        // Future should resolve to 4
-        assert!(future.wait_future().unwrap() == 4);
+            // Future should resolve to 4
+            assert!(future.await == 4);
 
-        // Final value should be 3
-        assert!(desynced.sync(|val| *val) == 3);
+            // Final value should be 3
+            assert!(desynced.sync(|val| *val) == 3);
+        })
     }, 500);
 }
