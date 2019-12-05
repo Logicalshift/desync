@@ -51,6 +51,8 @@ fn suspend_queue() {
 #[test]
 fn suspend_queue_with_local_drain() {
     timeout(|| {
+        use futures::executor;
+
         // Want a scheduler with 0 threads to force a 'drain on current thread' situation
         let scheduler = Arc::new(Scheduler::new());
         scheduler.set_max_threads(0);
@@ -60,7 +62,9 @@ fn suspend_queue_with_local_drain() {
         
         // Job so there's something to drain
         scheduler.desync(&queue, ||{});
-        scheduler.suspend(&queue);
+
+        // Start suspending the queue
+        let suspended = scheduler.suspend(&queue);
 
         // Resume after a delay
         let to_resume           = queue.clone();
@@ -75,6 +79,10 @@ fn suspend_queue_with_local_drain() {
 
         // Should be able to retrieve a value once the queue resumes
         assert!(scheduler.sync(&queue, || 42) == 42);
+
+        // Check that suspension actually occurred (as we have 0 threads, it'll get queued with the 'retrieve' request above 
+        // so it would get cancelled by the resume if we blocked earlier)
+        executor::block_on(suspended).unwrap();
     }, 500);
 }
 
