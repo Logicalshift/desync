@@ -57,6 +57,7 @@ use std::sync::*;
 use std::collections::vec_deque::*;
 
 use futures::future;
+use futures::task::{ArcWake};
 use futures::channel::oneshot;
 use futures::future::{Future, FutureExt};
 
@@ -104,9 +105,9 @@ fn initial_max_threads() -> usize {
 }
 
 ///
-/// The scheduler is used to schedule tasks onto a pool of threads
+/// The scheduler core contains the internal data used by the scheduler
 ///
-pub struct Scheduler {
+struct SchedulerCore {
     /// The queues that are active in the scheduler
     schedule: Arc<Mutex<VecDeque<Arc<JobQueue>>>>,
 
@@ -116,6 +117,18 @@ pub struct Scheduler {
     /// The maximum number of threads permitted in this scheduler
     max_threads: Mutex<usize>
 }
+
+///
+/// The scheduler is used to schedule tasks onto a pool of threads
+///
+pub struct Scheduler {
+    core: Arc<SchedulerCore>
+}
+
+///
+/// Waker that will wake the specified queue in the specified scheduler core
+///
+struct WakeQueue(Arc<JobQueue>, Arc<SchedulerCore>);
 
 ///
 /// Represents the state of a job queue
@@ -240,66 +253,57 @@ impl JobQueue {
     }
 }
 
-impl Scheduler {
+impl SchedulerCore {
     ///
-    /// Creates a new scheduler
-    /// 
-    /// (There's usually only one scheduler)
-    /// 
-    pub fn new() -> Scheduler {
-        let result = Scheduler { 
-            schedule:       Arc::new(Mutex::new(VecDeque::new())),
-            threads:        Mutex::new(vec![]),
-            max_threads:    Mutex::new(initial_max_threads())
-        };
+    /// Wakes a thread to run a dormant queue. Returns true if a thread was woken up
+    ///
+    fn schedule_thread(&self) -> bool {
+        // Find a dormant thread and activate it
+        let schedule = self.schedule.clone();
 
-        result
-    }
-
-    ///
-    /// Changes the maximum number of threads this scheduler can spawn (existing threads
-    /// are not despawned by this method)
-    ///
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_max_threads(&self, max_threads: usize) {
-        // Update the maximum number of threads we can spawn
-        { *self.max_threads.lock().expect("Max threads lock") = max_threads };
-
-        // Schedule as many threads as we can
-        while self.schedule_thread() {}
-    }
-
-    ///
-    /// Changes the maximum number of threads this scheduler can spawn (existing threads
-    /// are not despawned by this method)
-    ///
-    #[cfg(target_arch = "wasm32")]
-    pub fn set_max_threads(&self, max_threads: usize) {
-        // Webassembly does not support threads so we run synchronously
-    }
-
-    ///
-    /// Despawns threads if we're running more than the maximum number
-    /// 
-    /// Must not be called from a scheduler thread (as it waits for the threads to despawn)
-    ///
-    pub fn despawn_threads_if_overloaded(&self) {
-        let max_threads = { *self.max_threads.lock().expect("Max threads lock") };
-        let to_despawn  = {
-            // Transfer the threads from the threads vector to our _to_despawn variable
-            // This is then dropped outside the mutex (so we don't block if one of the threads doesn't stop)
-            let mut to_despawn  = vec![];
-            let mut threads     = self.threads.lock().expect("Scheduler threads lock");
-
-            while threads.len() > max_threads {
-                to_despawn.push(threads.pop().expect("Missing threads").1.despawn());
+        // Schedule work on this dormant thread
+        if !self.schedule_dormant(move || Self::next_to_run(&schedule), move |work| work.drain()) {
+            // Try to create a new thread
+            if self.spawn_thread_if_less_than_maximum() {
+                // Try harder to schedule this task if a thread was created
+                self.schedule_thread()
+            } else {
+                // Couldn't schedule on an existing thread or create a new one
+                false
             }
+        } else {
+            // Successfully scheduled
+            true
+        }
+    }
 
-            to_despawn
+    ///
+    /// If a queue is idle and has pending jobs, places it in the schedule
+    ///
+    fn reschedule_queue(&self, queue: &Arc<JobQueue>) {
+        let reschedule = {
+            let mut core = queue.core.lock().expect("JobQueue core lock");
+
+            if core.state == QueueState::Idle {
+                // Schedule a thread to restart the queue if more things were queued
+                if core.queue.len() > 0 {
+                    // Need to schedule the queue after this event
+                    core.state = QueueState::Pending;
+                    true
+                } else {
+                    // Queue is empty and can go back to idle
+                    core.state = QueueState::Idle;
+                    false
+                }
+            } else {
+                false
+            }
         };
 
-        // Wait for the threads to despawn
-        to_despawn.into_iter().for_each(|join_handle| { join_handle.join().ok(); });
+        if reschedule {
+            self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
+            self.schedule_thread();
+        }
     }
 
     ///
@@ -395,57 +399,84 @@ impl Scheduler {
             false
         }
     }
+}
+
+impl Scheduler {
+    ///
+    /// Creates a new scheduler
+    /// 
+    /// (There's usually only one scheduler)
+    /// 
+    pub fn new() -> Scheduler {
+        let core = SchedulerCore { 
+            schedule:       Arc::new(Mutex::new(VecDeque::new())),
+            threads:        Mutex::new(vec![]),
+            max_threads:    Mutex::new(initial_max_threads())
+        };
+
+        Scheduler {
+            core: Arc::new(core)
+        }
+    }
+
+    ///
+    /// Changes the maximum number of threads this scheduler can spawn (existing threads
+    /// are not despawned by this method)
+    ///
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_max_threads(&self, max_threads: usize) {
+        // Update the maximum number of threads we can spawn
+        { *self.core.max_threads.lock().expect("Max threads lock") = max_threads };
+
+        // Schedule as many threads as we can
+        while self.schedule_thread() {}
+    }
+
+    ///
+    /// Changes the maximum number of threads this scheduler can spawn (existing threads
+    /// are not despawned by this method)
+    ///
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_max_threads(&self, max_threads: usize) {
+        // Webassembly does not support threads so we run synchronously
+    }
+
+    ///
+    /// Despawns threads if we're running more than the maximum number
+    /// 
+    /// Must not be called from a scheduler thread (as it waits for the threads to despawn)
+    ///
+    pub fn despawn_threads_if_overloaded(&self) {
+        let max_threads = { *self.core.max_threads.lock().expect("Max threads lock") };
+        let to_despawn  = {
+            // Transfer the threads from the threads vector to our _to_despawn variable
+            // This is then dropped outside the mutex (so we don't block if one of the threads doesn't stop)
+            let mut to_despawn  = vec![];
+            let mut threads     = self.core.threads.lock().expect("Scheduler threads lock");
+
+            while threads.len() > max_threads {
+                to_despawn.push(threads.pop().expect("Missing threads").1.despawn());
+            }
+
+            to_despawn
+        };
+
+        // Wait for the threads to despawn
+        to_despawn.into_iter().for_each(|join_handle| { join_handle.join().ok(); });
+    }
 
     ///
     /// Wakes a thread to run a dormant queue. Returns true if a thread was woken up
     ///
     fn schedule_thread(&self) -> bool {
-        // Find a dormant thread and activate it
-        let schedule = self.schedule.clone();
-
-        // Schedule work on this dormant thread
-        if !self.schedule_dormant(move || Self::next_to_run(&schedule), move |work| work.drain()) {
-            // Try to create a new thread
-            if self.spawn_thread_if_less_than_maximum() {
-                // Try harder to schedule this task if a thread was created
-                self.schedule_thread()
-            } else {
-                // Couldn't schedule on an existing thread or create a new one
-                false
-            }
-        } else {
-            // Successfully scheduled
-            true
-        }
+        self.core.schedule_thread()
     }
 
     ///
     /// If a queue is idle and has pending jobs, places it in the schedule
     ///
     fn reschedule_queue(&self, queue: &Arc<JobQueue>) {
-        let reschedule = {
-            let mut core = queue.core.lock().expect("JobQueue core lock");
-
-            if core.state == QueueState::Idle || core.state == QueueState::WaitingForWake {
-                // Schedule a thread to restart the queue if more things were queued
-                if core.queue.len() > 0 {
-                    // Need to schedule the queue after this event
-                    core.state = QueueState::Pending;
-                    true
-                } else {
-                    // Queue is empty and can go back to idle
-                    core.state = QueueState::Idle;
-                    false
-                }
-            } else {
-                false
-            }
-        };
-
-        if reschedule {
-            self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
-            self.schedule_thread();
-        }
+        self.core.reschedule_queue(queue)
     }
 
     ///
@@ -454,7 +485,7 @@ impl Scheduler {
     pub fn spawn_thread(&self) {
         let is_busy     = Arc::new(Mutex::new(false));
         let new_thread  = SchedulerThread::new();
-        self.threads.lock().expect("Scheduler threads lock").push((is_busy, new_thread));
+        self.core.threads.lock().expect("Scheduler threads lock").push((is_busy, new_thread));
     }
 
     ///
@@ -513,7 +544,7 @@ impl Scheduler {
         match schedule_queue {
             ScheduleState::Idle => {
                 // Add the queue to the schedule
-                self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
+                self.core.schedule.lock().expect("Schedule lock").push_back(queue.clone());
 
                 // Wake up a thread to run it if we can
                 self.schedule_thread();
@@ -829,14 +860,34 @@ impl Scheduler {
 impl fmt::Debug for Scheduler {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         let threads = {
-            let threads         = self.threads.lock().expect("Scheduler threads lock");
+            let threads         = self.core.threads.lock().expect("Scheduler threads lock");
             let busyness:String = threads.iter().map(|&(ref busy, _)| { if *busy.lock().expect("Thread busy lock") { 'B' } else { 'I' } }).collect();
 
             busyness
         };
-        let queue_size = format!("Pending queue count: {}", self.schedule.lock().expect("Schedule lock").len());
+        let queue_size = format!("Pending queue count: {}", self.core.schedule.lock().expect("Schedule lock").len());
 
         fmt.write_str(&format!("{} {}", threads, queue_size))
+    }
+}
+
+impl ArcWake for WakeQueue {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        // Decompose this structure
+        let WakeQueue(ref queue, ref core) = **arc_self;
+
+        // Move the queue to the idle state if we can
+        {
+            let mut queue_core = queue.core.lock().unwrap();
+
+            // Queue can be woken if it's in the WaitingForWake state
+            if queue_core.state == QueueState::WaitingForWake {
+                queue_core.state = QueueState::Idle;
+            }
+        }
+
+        // Cause the core to reschedule its events
+        core.reschedule_queue(queue);
     }
 }
 
