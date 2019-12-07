@@ -151,7 +151,7 @@ enum QueueState {
     /// Queue has been assigned to a thread and is currently running
     Running,
 
-    /// A job on the queue has indicated that it's waiting to be re-awakened
+    /// A job on the queue has indicated that it's waiting to be re-awakened (by the scheduler)
     WaitingForWake,
 
     /// A wake-up call was made while the queue was in the running state
@@ -776,9 +776,50 @@ impl Scheduler {
         while result.0.lock().expect("Sync queue result lock").is_none() {
             if let Some(mut job) = queue.dequeue() {
                 // Queue is running
-                debug_assert!(queue.core.lock().unwrap().state != QueueState::Suspended);
-                /* job.run(); */
-                unimplemented!("Run job while draining synchronously");
+                debug_assert!(queue.core.lock().unwrap().state == QueueState::Running);
+
+                let waker   = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
+                let waker   = task::waker_ref(&waker);
+                let context = Context::from_waker(&waker);
+
+                loop {
+                    let poll_result = job.run(&context);
+
+                    match poll_result {
+                        // A ready result ends the loop
+                        Poll::Ready(()) => break,
+                        Poll::Pending   => {
+                            // Try to move to the parking state
+                            let should_park = {
+                                let mut core = queue.core.lock().unwrap();
+
+                                core.state = match core.state {
+                                    QueueState::AwokenWhileRunning  => QueueState::Running,
+                                    QueueState::Running             => QueueState::WaitingForWake,
+                                    other                           => panic!("Queue was in unexpected state {:?}", other)
+                                };
+
+                                core.state == QueueState::WaitingForWake
+                            };
+
+                            // Park until the queue state returns changes
+                            if should_park {
+                                // If should_park is set to false, the queue was awoken very quickly
+                                loop {
+                                    let current_state = { queue.core.lock().unwrap().state };
+                                    match current_state {
+                                        QueueState::Idle            => break,
+                                        QueueState::WaitingForWake  => (),
+                                        other                       => panic!("Queue was in unexpected state {:?}", other)
+                                    }
+
+                                    // Park until we're awoken from the other thread (once awoken, we re-check the state)
+                                    thread::park();
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 // Queue may have suspended (or gone to suspending and back to running)
                 let wait_in_background = {
