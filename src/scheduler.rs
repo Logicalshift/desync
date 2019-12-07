@@ -48,6 +48,7 @@
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
 
 use super::job::*;
+use super::future_job::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
 
@@ -57,11 +58,10 @@ use std::thread::{Thread};
 use std::sync::*;
 use std::collections::vec_deque::*;
 
-use futures::future;
 use futures::task;
 use futures::task::{ArcWake, Context, Poll};
 use futures::channel::oneshot;
-use futures::future::{Future, FutureExt};
+use futures::future::{Future};
 
 #[cfg(not(target_arch = "wasm32"))]
 use num_cpus;
@@ -562,6 +562,14 @@ impl Scheduler {
     /// in the specified queue and as soon as a thread is available to run it.
     ///
     pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) {
+        self.schedule_job_desync(queue, Box::new(Job::new(job)));
+    }
+
+    ///
+    /// Schedules a job on this scheduler, which will run after any jobs that are already 
+    /// in the specified queue and as soon as a thread is available to run it.
+    ///
+    fn schedule_job_desync(&self, queue: &Arc<JobQueue>, job: Box<dyn ScheduledJob>) {
         enum ScheduleState {
             Idle,
             Running,
@@ -569,11 +577,10 @@ impl Scheduler {
         }
 
         let schedule_queue = {
-            let job         = Job::new(job);
             let mut core    = queue.core.lock().expect("JobQueue core lock");
 
             // Push the job onto the queue
-            core.queue.push_back(Box::new(job));
+            core.queue.push_back(job);
 
             match core.state {
                 QueueState::Idle => {
@@ -628,35 +635,27 @@ impl Scheduler {
     /// Pauses a queue until a particular future has completed, before performing a
     /// task with the result of that future
     ///
-    pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'a+Future<Output=Item>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Output=Res>+Send 
+    pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'static+Future<Output=Item>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl 'a+Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(Item) -> Res {
-        // Suspend the queue
-        let after_suspend = self.suspend(queue);
+        let (send, receive) = oneshot::channel();
 
-        // Create a future that completes after we suspend and after our next future
-        let after = future::join(after_suspend, after);
+        // Create a future that will perform the job
+        let perform_job = FutureJob::new(async {
+            // Wait for the task to complete
+            let val = after.await;
 
-        // Resume it after the future completes
-        let future_queue    = queue.clone();
-        let next_future     = after.then(move |val| {
-            // It's invalid for the suspension not to be in effect when we run our future
-            let val = {
-                match val {
-                    (Err(_suspend_err), _) => {
-                        panic!("While waiting for a future: queue suspension was cancelled");
-                    },
-                    (Ok(_), val) => val
-                }
-            };
-
-            // TODO: another thread could technically resume the queue, which results in unsafe behaviour from desync
-            // TODO: we always re-queue on the main scheduler here
+            // Generate the result
             let result = job(val);
-            scheduler().resume(&future_queue);
-            future::ready(result)
+
+            // Signal the channel
+            send.send(result).ok();
         });
 
-        next_future
+        // Add to the queue
+        self.schedule_job_desync(queue, Box::new(perform_job));
+
+        // The receive channel is the future we generated
+        receive
     }
 
     ///

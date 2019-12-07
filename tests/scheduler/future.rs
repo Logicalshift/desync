@@ -59,7 +59,7 @@ fn wait_for_future() {
 
         executor::block_on(async {
             // Future should resolve to 4
-            assert!(future.await.unwrap() == 4);
+            assert!(future.await.unwrap() == Ok(4));
 
             // Should receive the '2' from the future, then 3
             assert!(rx.recv_timeout(Duration::from_millis(100)).unwrap() == 2);
@@ -98,7 +98,7 @@ fn future_waits_for_us() {
 
         executor::block_on(async {
             // Future should resolve to 4
-            assert!(future.await.unwrap() == 4);
+            assert!(future.await.unwrap() == Ok(4));
 
             // '1' should be available first
             assert!(rx.recv().unwrap() == 1);

@@ -156,7 +156,7 @@ fn wait_for_future() {
             future_tx.send(2).unwrap();
 
             // Future should resolve to 4
-            assert!(future.await == 4);
+            assert!(future.await == Ok(4));
 
             // Final value should be 3
             assert!(desynced.sync(|val| *val) == 3);
