@@ -214,7 +214,8 @@ impl JobQueue {
             // Run jobs until the queue is drained
             while let Some(mut job) = self.dequeue() {
                 debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-                job.run();
+                unimplemented!("Run job while draining");
+                /* job.run(); */
             }
 
             // Try to move back to the 'not running' state
@@ -691,7 +692,8 @@ impl Scheduler {
             if let Some(mut job) = queue.dequeue() {
                 // Queue is running
                 debug_assert!(queue.core.lock().unwrap().state != QueueState::Suspended);
-                job.run();
+                /* job.run(); */
+                unimplemented!("Run job while draining synchronously");
             } else {
                 // Queue may have suspended (or gone to suspending and back to running)
                 let wait_in_background = {
