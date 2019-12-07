@@ -266,6 +266,10 @@ impl JobQueue {
                             QueueState::AwokenWhileRunning  => QueueState::Running,
                             other                           => other
                         };
+
+                        if core.state == QueueState::WaitingForWake {
+                            return;
+                        }
                     }
                 }
             }
@@ -273,19 +277,15 @@ impl JobQueue {
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Pending || core.state == QueueState::Suspending || core.state == QueueState::WaitingForWake);
+                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
                     core.state = match core.state {
                         QueueState::Running         => QueueState::Idle,
                         QueueState::Suspending      => QueueState::Suspended,
-                        QueueState::WaitingForWake  => QueueState::WaitingForWake,
                         x                           => x
                     };
-                    done = true;
-                } else if core.state == QueueState::WaitingForWake {
-                    // Will be re-awoken later
                     done = true;
                 } else if core.state == QueueState::Suspending {
                     // Stop draining as we're suspending
