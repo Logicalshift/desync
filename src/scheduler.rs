@@ -284,6 +284,16 @@ impl JobQueue {
                         x                           => x
                     };
                     done = true;
+                } else if core.state == QueueState::WaitingForWake {
+                    // Will be re-awoken later
+                    done = true;
+                } else if core.state == QueueState::Suspending {
+                    // Stop draining as we're suspending
+                    core.state = QueueState::Suspended;
+                    done = true;
+                } else if core.state == QueueState::Pending {
+                    // Will restart when we get re-scheduled
+                    done = true;
                 }
             }
         }
