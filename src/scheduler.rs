@@ -53,6 +53,7 @@ use super::scheduler_thread::*;
 
 use std::fmt;
 use std::thread;
+use std::thread::{Thread};
 use std::sync::*;
 use std::collections::vec_deque::*;
 
@@ -130,6 +131,11 @@ pub struct Scheduler {
 /// Waker that will wake the specified queue in the specified scheduler core
 ///
 struct WakeQueue(Arc<JobQueue>, Arc<SchedulerCore>);
+
+///
+/// Waker that will wake the specified thread
+///
+struct WakeThread(Arc<JobQueue>, Thread);
 
 ///
 /// Represents the state of a job queue
@@ -936,6 +942,28 @@ impl ArcWake for WakeQueue {
 
         // Cause the core to reschedule its events
         core.reschedule_queue(queue, Arc::clone(core));
+    }
+}
+
+impl ArcWake for WakeThread {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        // Decompose this structure
+        let WakeThread(ref queue, ref thread) = **arc_self;
+
+        // Move the queue to the idle state if we can
+        {
+            let mut queue_core = queue.core.lock().unwrap();
+
+            // Queue can be woken if it's in the WaitingForWake state
+            match queue_core.state {
+                QueueState::WaitingForWake  => queue_core.state = QueueState::Idle,
+                QueueState::Running         => queue_core.state = QueueState::AwokenWhileRunning,
+                other_state                 => queue_core.state = other_state
+            }
+        }
+
+        // Wake the thread
+        thread.unpark();
     }
 }
 
