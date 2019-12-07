@@ -1,5 +1,6 @@
 use super::job::*;
 
+use futures::task::{Context, Poll};
 use std::mem;
 
 ///
@@ -25,10 +26,10 @@ impl UnsafeJob {
 unsafe impl Send for UnsafeJob {}
 
 impl ScheduledJob for UnsafeJob {
-    fn run(&mut self) {
+    fn run(&mut self, context: &Context) -> Poll<()> {
         unsafe {
             let action = self.action as *mut dyn ScheduledJob;
-            (*action).run();
+            (*action).run(context)
         }
     }
 }
