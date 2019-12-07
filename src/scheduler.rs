@@ -239,7 +239,7 @@ impl JobQueue {
     ///
     /// Runs jobs on this queue until there are none left, marking the job as inactive when done
     /// 
-    fn drain(&self, context: &Context) {
+    fn drain(&self, context: &mut Context) {
         let _active = ActiveQueue { queue: self };
 
         debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
@@ -308,9 +308,9 @@ impl SchedulerCore {
         let do_work     = move |work: Arc<JobQueue>| {
             let waker       = Arc::new(WakeQueue(Arc::clone(&work), Arc::clone(&work_core)));
             let waker       = task::waker_ref(&waker);
-            let context     = Context::from_waker(&waker);
+            let mut context = Context::from_waker(&waker);
 
-            work.drain(&context)
+            work.drain(&mut context)
         };
 
         if !self.schedule_dormant(move || Self::next_to_run(&schedule), do_work) {
@@ -778,12 +778,12 @@ impl Scheduler {
                 // Queue is running
                 debug_assert!(queue.core.lock().unwrap().state == QueueState::Running);
 
-                let waker   = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
-                let waker   = task::waker_ref(&waker);
-                let context = Context::from_waker(&waker);
+                let waker       = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
+                let waker       = task::waker_ref(&waker);
+                let mut context = Context::from_waker(&waker);
 
                 loop {
-                    let poll_result = job.run(&context);
+                    let poll_result = job.run(&mut context);
 
                     match poll_result {
                         // A ready result ends the loop

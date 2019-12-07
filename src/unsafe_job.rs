@@ -26,7 +26,7 @@ impl UnsafeJob {
 unsafe impl Send for UnsafeJob {}
 
 impl ScheduledJob for UnsafeJob {
-    fn run(&mut self, context: &Context) -> Poll<()> {
+    fn run(&mut self, context: &mut Context) -> Poll<()> {
         unsafe {
             let action = self.action as *mut dyn ScheduledJob;
             (*action).run(context)

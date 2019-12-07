@@ -5,7 +5,7 @@ use futures::task::{Context, Poll};
 /// 
 pub trait ScheduledJob : Send {
     /// Runs this particular job
-    fn run(&mut self, context: &Context) -> Poll<()>;
+    fn run(&mut self, context: &mut Context) -> Poll<()>;
 }
 
 ///
@@ -24,7 +24,7 @@ where TFn: Send+FnOnce() -> () {
 
 impl<TFn> ScheduledJob for Job<TFn>
 where TFn: Send+FnOnce() -> () {
-    fn run(&mut self, _context: &Context) -> Poll<()> {
+    fn run(&mut self, _context: &mut Context) -> Poll<()> {
         // Consume the action when it's run
         let action = self.action.take();
 
