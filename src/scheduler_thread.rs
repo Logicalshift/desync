@@ -1,5 +1,3 @@
-use super::job::*;
-
 use std::thread;
 use std::sync::mpsc::*;
 
@@ -8,7 +6,7 @@ use std::sync::mpsc::*;
 ///
 pub struct SchedulerThread {
     /// The jobs that this thread should run
-    jobs: Sender<Box<dyn ScheduledJob>>,
+    jobs: Sender<Box<dyn FnOnce() -> ()+Send>>,
 
     /// The thread itself
     thread: thread::JoinHandle<()>,
@@ -20,12 +18,12 @@ impl SchedulerThread {
     ///
     pub fn new() -> SchedulerThread {
         // All the thread does is run jobs from its channel
-        let (jobs_in, jobs_out): (Sender<Box<dyn ScheduledJob>>, Receiver<Box<dyn ScheduledJob>>) = channel();
+        let (jobs_in, jobs_out): (Sender<Box<dyn FnOnce() -> ()+Send>>, Receiver<Box<dyn FnOnce() -> ()+Send>>) = channel();
         let thread = thread::Builder::new()
             .name("desync jobs thread".to_string())
             .spawn(move || {
                 while let Ok(mut job) = jobs_out.recv() {
-                    job.run();
+                    (*job)();
                 }
             }).unwrap();
 
@@ -38,7 +36,7 @@ impl SchedulerThread {
     ///
     /// Schedules a job to be run on this thread
     ///
-    pub fn run<Job: 'static+ScheduledJob>(&self, job: Job) {
+    pub fn run<Job: 'static+FnOnce() -> ()+Send>(&self, job: Job) {
         self.jobs.send(Box::new(job)).unwrap();
     }
 

@@ -337,7 +337,7 @@ impl Scheduler {
 
                 // This thread is busy
                 *busy = true;
-                thread.run(Job::new(move || {
+                thread.run(move || {
                     let mut done = false;
 
                     while !done {
@@ -362,7 +362,7 @@ impl Scheduler {
                             done = true;
                         }
                     }
-                }));
+                });
 
                 return true;
             }
