@@ -131,13 +131,16 @@ enum QueueState {
     /// Queue has been assigned to a thread and is currently running
     Running,
 
+    /// A job on the queue has indicated that it's waiting to be re-awakened
+    WaitingForWake,
+
     /// Queue received a panic and is no longer able to be scheduled
     Panicked,
 
     /// Queue is running but should suspend instead of running the next step
     Suspending,
 
-    /// Queue has been suspended and won't run futher jobs
+    /// Queue has been suspended and won't run futher jobs until it is re-awakened
     Suspended
 }
 
@@ -804,12 +807,13 @@ impl Scheduler {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
             match core.state {
-                QueueState::Suspended   => RunAction::WaitForBackground,
-                QueueState::Suspending  => RunAction::WaitForBackground,
-                QueueState::Running     => RunAction::WaitForBackground,
-                QueueState::Panicked    => RunAction::Panic,
-                QueueState::Pending     => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
-                QueueState::Idle        => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Suspended       => RunAction::WaitForBackground,
+                QueueState::Suspending      => RunAction::WaitForBackground,
+                QueueState::Running         => RunAction::WaitForBackground,
+                QueueState::WaitingForWake  => RunAction::WaitForBackground,
+                QueueState::Panicked        => RunAction::Panic,
+                QueueState::Pending         => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
+                QueueState::Idle            => { core.state = QueueState::Running; RunAction::Immediate }
             }
         };
 
