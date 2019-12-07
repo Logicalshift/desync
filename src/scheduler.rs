@@ -217,13 +217,13 @@ impl JobQueue {
     fn dequeue(&self) -> Option<Box<dyn ScheduledJob>> {
         let mut core = self.core.lock().expect("JobQueue core lock");
 
-        if core.state == QueueState::Suspending {
-            // Stop dequeuing if the queue is suspending
-            None
-        } else {
-            // Treat queue as running in all other states
-            debug_assert!(core.state == QueueState::Running);
-            core.queue.pop_front()
+        match core.state {
+            QueueState::Suspending      => None,
+            QueueState::WaitingForWake  => None,
+            other                       => {
+                debug_assert!(other == QueueState::Running);
+                core.queue.pop_front()
+            }
         }
     }
 
@@ -246,7 +246,7 @@ impl JobQueue {
         let mut done = false;
 
         while !done {
-            // Run jobs until the queue is drained
+            // Run jobs until the queue is drained or blocks
             while let Some(mut job) = self.dequeue() {
                 debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
 
@@ -266,11 +266,6 @@ impl JobQueue {
                             QueueState::AwokenWhileRunning  => QueueState::Running,
                             other                           => other
                         };
-
-                        // Stop processing jobs if the queue has moved to a waiting state
-                        if core.state == QueueState::WaitingForWake {
-                            break;
-                        }
                     }
                 }
             }
