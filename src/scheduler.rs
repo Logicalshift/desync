@@ -426,7 +426,7 @@ impl Scheduler {
         let reschedule = {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
-            if core.state == QueueState::Idle {
+            if core.state == QueueState::Idle || core.state == QueueState::WaitingForWake {
                 // Schedule a thread to restart the queue if more things were queued
                 if core.queue.len() > 0 {
                     // Need to schedule the queue after this event
