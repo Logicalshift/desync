@@ -273,7 +273,7 @@ impl JobQueue {
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending || core.state == QueueState::WaitingForWake);
+                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Pending || core.state == QueueState::Suspending || core.state == QueueState::WaitingForWake);
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
