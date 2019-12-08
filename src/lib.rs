@@ -65,13 +65,14 @@
 //! # use std::thread;
 //! # use std::time::*;
 //! # use futures::executor;
+//! # use futures::future;
 //! # let number = Desync::new(0);
 //! # number.desync(|val| {
 //! #     // Long update here
 //! #     thread::sleep(Duration::from_millis(100));
 //! #     *val = 42;
 //! # });
-//! let future_number = number.future(|val| *val);
+//! let future_number = number.future(|val| future::ready(*val));
 //! assert!(executor::block_on(async { future_number.await.unwrap() == 42 }));
 //! # }
 //! ```

@@ -6,6 +6,7 @@ use desync::Desync;
 mod scheduler;
 use self::scheduler::timeout::*;
 
+use futures::future;
 use std::time::*;
 use std::thread::*;
 
@@ -74,7 +75,7 @@ fn update_data_with_future() {
         });
 
         executor::block_on(async {
-            let future = desynced.future(|data| { data.val });
+            let future = desynced.future(|data| { future::ready(data.val) });
             assert!(future.await.unwrap() == 42);
         });
     }, 500);
@@ -97,7 +98,7 @@ fn update_data_with_future_1000_times() {
             });
 
             executor::block_on(async {
-                let future = desynced.future(|data| data.val);
+                let future = desynced.future(|data| future::ready(data.val));
                 
                 assert!(future.await.unwrap() == 43);
             });

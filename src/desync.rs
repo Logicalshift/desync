@@ -91,13 +91,13 @@ impl<T: 'static+Send> Desync<T> {
     ///
     pub fn sync<TFn, Result>(&self, job: TFn) -> Result
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
-        let result = unsafe {
+        let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
             let data = DataRef(&*self.data);
 
             sync(&self.queue, move || {
                 let data = data.0 as *mut T;
-                job(&mut *data)
+                job(unsafe { &mut *data })
             })
         };
 
@@ -108,19 +108,20 @@ impl<T: 'static+Send> Desync<T> {
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, job: TFn) -> impl Future<Output=Result<Item, oneshot::Canceled>>+Send
-    where TFn: 'static+Send+FnOnce(&mut T) -> Item {
-        let (send, receive) = oneshot::channel();
+    pub fn future<TFn, TFuture>(&self, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    where   TFn:                'static+Send+FnOnce(&mut T) -> TFuture,
+            TFuture:            'static+Send+Future,
+            TFuture::Output:    Send {
+        let data = DataRef(&*self.data);
 
-        self.desync(|data| {
-            let result = job(data);
+        scheduler().future(&self.queue, move || {
+            let data        = data.0 as *mut T;
+            let job         = job(unsafe { &mut *data });
 
-            if let Err(_result) = send.send(result) {
-                // The listening side disconnected: we'll throw away the result and act like a normal desync instead
+            async {
+                job.await
             }
-        });
-
-        receive
+        })
     }
 
     ///
