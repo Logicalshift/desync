@@ -75,15 +75,13 @@ impl<T: 'static+Send> Desync<T> {
     ///
     pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
-        unsafe {
-            // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
-            let data = DataRef(&*self.data);
+        // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
+        let data = DataRef(&*self.data);
 
-            desync(&self.queue, move || {
-                let data = data.0 as *mut T;
-                job(&mut *data);
-            })
-        }
+        desync(&self.queue, move || {
+            let data = data.0 as *mut T;
+            job(unsafe { &mut *data });
+        })
     }
 
     ///
@@ -131,16 +129,14 @@ impl<T: 'static+Send> Desync<T> {
     ///
     pub fn after<'a, TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(&mut T, Fut::Output) -> Res {
-        unsafe {
-            // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-            // Also, we'll have exclusive access to this object when the callback occurs
-            let data = DataRef(&*self.data);
+        // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
+        // Also, we'll have exclusive access to this object when the callback occurs
+        let data = DataRef(&*self.data);
 
-            scheduler().after(&self.queue, after, move |future_result| {
-                let data = data.0 as *mut T;
-                job(&mut *data, future_result)
-            })
-        }
+        scheduler().after(&self.queue, after, move |future_result| {
+            let data = data.0 as *mut T;
+            job(unsafe { &mut *data }, future_result)
+        })
     }
 }
 
