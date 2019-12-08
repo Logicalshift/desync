@@ -14,7 +14,7 @@ fn schedule_future() {
         use futures::executor;
 
         let queue       = queue();
-        let future      = future(&queue, move || {
+        let future      = future(&queue, move || async {
             thread::sleep(Duration::from_millis(100));
             42
         });

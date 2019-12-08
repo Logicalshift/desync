@@ -624,15 +624,29 @@ impl Scheduler {
     ///
     /// Schedules a job to run and returns a future for retrieving the result
     ///
-    pub fn future<TFn, Item: 'static+Send>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<Item, oneshot::Canceled>>+Send
-    where TFn: 'static+Send+FnOnce() -> Item {
+    pub fn future<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    where   TFn:                'static+Send+FnOnce() -> TFuture,
+            TFuture:            'static+Send+Future,
+            TFuture::Output:    Send {
         let (send, receive) = oneshot::channel();
 
-        self.desync(queue, move || {
-            let res = job();
-            send.send(res).ok();
+        let perform_job = FutureJob::new(move || {
+            // Create the job when we're queued up
+            let job = job();
+
+            async {
+                // Run the future
+                let val = job.await;
+
+                // Send to the channel
+                send.send(val).ok();
+            }
         });
 
+        // Schedule the job
+        self.schedule_job_desync(queue, Box::new(perform_job));
+
+        // Receive channel will be notified when the job is completed
         receive
     }
 
@@ -1046,8 +1060,10 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 ///
 /// Schedules a job to run and returns a future for retrieving the result
 ///
-pub fn future<TFn, Item: 'static+Send>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<Item, oneshot::Canceled>>+Send
-where TFn: 'static+Send+FnOnce() -> Item {
+pub fn future<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+where   TFn:                'static+Send+FnOnce() -> TFuture,
+        TFuture:            'static+Send+Future,
+        TFuture::Output:    Send {
     scheduler().future(queue, job)
 }
 
