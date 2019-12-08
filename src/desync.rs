@@ -5,8 +5,10 @@
 use super::scheduler::*;
 
 use std::sync::Arc;
+use std::ops::{Deref, DerefMut};
+use std::marker::{PhantomData};
 use futures::channel::oneshot;
-use futures::future::Future;
+use futures::future::{Future, FutureObj};
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
@@ -33,6 +35,32 @@ unsafe impl<T: Send> Sync for Desync<T> {}
 /// 
 struct DataRef<T: Send>(*const T);
 unsafe impl<T: Send> Send for DataRef<T> {}
+
+///
+/// A mutable reference to the data contained within a desync, used to retrieve or modify its value during a future
+///
+pub struct DesyncRef<'a, T: Send> {
+    data: DataRef<T>,
+    phantom_lifetime: PhantomData<&'a T>
+}
+
+// Desync guarantees that while the future is running, nothing else can access the reference (it does this through ordering operations
+// rather than mutual exclusion)
+unsafe impl<'a, T: Send> Send for DesyncRef<'a, T> {}
+
+impl<'a, T: Send> Deref for DesyncRef<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        unsafe { &*self.data.0 }
+    }
+}
+
+impl<'a, T: Send> DerefMut for DesyncRef<'a, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        unsafe { &mut *(self.data.0 as *mut T) }
+    }
+}
 
 // TODO: we can change DataRef to Shared (https://doc.rust-lang.org/std/ptr/struct.Shared.html in the future)
 
@@ -102,6 +130,24 @@ impl<T: 'static+Send> Desync<T> {
         };
 
         result
+    }
+
+    ///
+    /// Performs an operation asynchronously on the contents of this item, returning the 
+    /// result via a future.
+    ///
+    pub fn future2<TFn, Item>(&self, job: TFn) -> impl Future<Output=Result<Item, oneshot::Canceled>>+Send
+    where   for<'a> TFn:    'static+Send+FnOnce(DesyncRef<'a, T>) -> FutureObj<'a, Item>,
+            Item:           'static+Send {
+        let data = DataRef(&*self.data);
+        let data = DesyncRef { data: data, phantom_lifetime: PhantomData };
+
+        scheduler().future(&self.queue, move || {
+            async {
+                let job     = job(data);
+                job.await
+            }
+        })
     }
 
     ///
