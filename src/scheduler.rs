@@ -645,15 +645,16 @@ impl Scheduler {
         let (send, receive) = oneshot::channel();
 
         // Create a future that will perform the job
-        let perform_job = FutureJob::new(async {
-            // Wait for the task to complete
-            let val = after.await;
+        let perform_job = FutureJob::new(move || { async {
+                // Wait for the task to complete
+                let val = after.await;
 
-            // Generate the result
-            let result = job(val);
+                // Generate the result
+                let result = job(val);
 
-            // Signal the channel
-            send.send(result).ok();
+                // Signal the channel
+                send.send(result).ok();
+            }
         });
 
         // Add to the queue
