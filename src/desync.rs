@@ -129,8 +129,8 @@ impl<T: 'static+Send> Desync<T> {
     /// After the pending operations for this item are performed, waits for the
     /// supplied future to complete and then calls the specified function
     ///
-    pub fn after<'a, TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'static+Future<Output=Item>+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
-    where TFn: 'static+Send+FnOnce(&mut T, Item) -> Res {
+    pub fn after<'a, TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
+    where TFn: 'static+Send+FnOnce(&mut T, Fut::Output) -> Res {
         unsafe {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
             // Also, we'll have exclusive access to this object when the callback occurs

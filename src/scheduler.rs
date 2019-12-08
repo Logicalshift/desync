@@ -640,8 +640,8 @@ impl Scheduler {
     /// Pauses a queue until a particular future has completed, before performing a
     /// task with the result of that future
     ///
-    pub fn after<TFn, Item: 'static+Send, Res: 'static+Send, Fut: 'static+Future<Output=Item>+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl Future<Output=Result<Res, oneshot::Canceled>>+Send 
-    where TFn: 'static+Send+FnOnce(Item) -> Res {
+    pub fn after<TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl Future<Output=Result<Res, oneshot::Canceled>>+Send 
+    where TFn: 'static+Send+FnOnce(Fut::Output) -> Res {
         let (send, receive) = oneshot::channel();
 
         // Create a future that will perform the job
