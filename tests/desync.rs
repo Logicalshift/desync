@@ -119,14 +119,16 @@ fn update_future_async() {
         // Create a future that will read the first value
         let first_clone = Arc::clone(&first);
 
-        // For some reason, can't declare the future inside our function (Rust seems to not like the lifetime implications but the 
-        // error is very hard to parse, and it's not clear why creating it here should be OK)
-        let first_val   = first_clone.future(|first_val: &mut i32| future::ready(*first_val));
+        let res = second.future(move |second_val: &mut i32| {
+            // Can't reference first_clone inside the async block as it'll make it escape from this function
+            // (Which seems fine to me as this is a FnOnce but not to Rust: future must be created outside the async block as a result)
+            let first_val   = first_clone.future(|first_val: &mut i32| future::ready(*first_val));
 
-        let res = second.future(move |second_val: &mut i32| async {
-            let first_val = first_val.await.unwrap();
-            //*second_val = first_val + 1;
-            first_val
+            async {
+                let first_val = first_val.await.unwrap();
+                //*second_val = first_val + 1;
+                first_val
+            }
         }).await;
 
         assert!(res.unwrap() == 2);
