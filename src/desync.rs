@@ -7,8 +7,30 @@ use super::scheduler::*;
 use std::pin::{Pin};
 use std::sync::{Arc};
 use std::marker::{Unpin};
+
 use futures::channel::oneshot;
 use futures::future::Future;
+
+///
+/// A function that returns a future that has the same lifetime as the value that's borrowed
+///
+pub trait DesyncFutureFnOnce<'a, Input> {
+    type TFuture: 'a + Send + Future;
+
+    fn call(self, data: &'a mut Input) -> Self::TFuture;
+}
+
+impl<'a, TFnOnce, Input, TFuture> DesyncFutureFnOnce<'a, Input> for TFnOnce 
+where   TFnOnce:    FnOnce(&'a mut Input) -> TFuture,
+        TFuture:    'a,
+        Input:      'a,
+        TFuture:    Send + Future {
+    type TFuture = TFuture;
+
+    fn call(self, data: &'a mut Input) -> Self::TFuture {
+        self(data)
+    }
+}
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
@@ -111,14 +133,14 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// result via a future.
     ///
     pub fn future<TFn, TFuture>(&self, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
-    where   TFn:                'static+Send+FnOnce(&mut T) -> TFuture,
+    where   for<'a> TFn:        'static+Send+DesyncFutureFnOnce<'a, T, TFuture=TFuture>,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
         let data = DataRef(&*self.data);
 
         scheduler().future(&self.queue, move || {
             let data        = data.0 as *mut T;
-            let job         = job(unsafe { &mut *data });
+            let job         = job.call(unsafe { &mut *data });
 
             async {
                 job.await
