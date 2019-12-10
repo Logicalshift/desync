@@ -9,6 +9,7 @@ use self::scheduler::timeout::*;
 use futures::future;
 use std::time::*;
 use std::thread::*;
+use std::sync::{Arc};
 
 #[derive(Debug)]
 struct TestData {
@@ -83,7 +84,6 @@ fn update_data_with_future() {
 
 #[test]
 fn update_data_with_future_1000_times() {
-    // Seems to timeout fairly reliably after signalling the future
     use futures::executor;
 
     for _i in 0..1000 {
@@ -104,6 +104,34 @@ fn update_data_with_future_1000_times() {
             });
         }, 500);
     }
+}
+
+#[test]
+fn update_future_async() {
+    use futures::executor;
+
+    let first   = Arc::new(Desync::new(0));
+    let second  = Desync::new(0);
+
+    first.desync(|val| { *val = 2 });
+
+    executor::block_on(async {
+        // Create a future that will read the first value
+        let first_clone = Arc::clone(&first);
+
+        // For some reason, can't declare the future inside our function (Rust seems to not like the lifetime implications but the 
+        // error is very hard to parse, and it's not clear why creating it here should be OK)
+        let first_val   = first_clone.future(|first_val: &mut i32| future::ready(*first_val));
+
+        let res = second.future(move |second_val: &mut i32| async {
+            let first_val = first_val.await.unwrap();
+            //*second_val = first_val + 1;
+            first_val
+        }).await;
+
+        assert!(res.unwrap() == 2);
+        assert!(second.sync(|val| *val) == 3);
+    });
 }
 
 #[test]
