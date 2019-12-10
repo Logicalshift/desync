@@ -4,26 +4,28 @@
 
 use super::scheduler::*;
 
-use std::sync::Arc;
+use std::pin::{Pin};
+use std::sync::{Arc};
+use std::marker::{Unpin};
 use futures::channel::oneshot;
 use futures::future::Future;
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
 ///
-pub struct Desync<T: Send> {
+pub struct Desync<T: Send+Unpin> {
     /// Queue used for scheduling runtime for this object
     queue:  Arc<JobQueue>,
 
     /// Data for this object. Boxed so the pointer remains the same through the lifetime of the object.
-    data:   Box<T>
+    data:   Pin<Box<T>>
 }
 
 // Rust actually derives this anyway at the moment
-unsafe impl<T: Send> Send for Desync<T> {}
+unsafe impl<T: Send+Unpin> Send for Desync<T> {}
 
 // True iff queue: Sync
-unsafe impl<T: Send> Sync for Desync<T> {}
+unsafe impl<T: Send+Unpin> Sync for Desync<T> {}
 
 ///
 /// Used for passing the data pointer through to the queue
@@ -37,7 +39,7 @@ unsafe impl<T: Send> Send for DataRef<T> {}
 // TODO: we can change DataRef to Shared (https://doc.rust-lang.org/std/ptr/struct.Shared.html in the future)
 
 // TODO: T does not need to be static as we know that its lifetime is at least the lifetime of Desync<T> and hence the queue
-impl<T: 'static+Send> Desync<T> {
+impl<T: 'static+Send+Unpin> Desync<T> {
     ///
     /// Creates a new Desync object
     ///
@@ -46,7 +48,7 @@ impl<T: 'static+Send> Desync<T> {
 
         Desync {
             queue:  queue,
-            data:   Box::new(data)
+            data:   Pin::new(Box::new(data))
         }
     }
 
@@ -141,7 +143,7 @@ impl<T: 'static+Send> Desync<T> {
     }
 }
 
-impl<T: Send> Drop for Desync<T> {
+impl<T: Send+Unpin> Drop for Desync<T> {
     fn drop(&mut self) {
         // Ensure that everything on the queue has committed by queueing a last synchronous event
         // (Not synchronising the queue would make this unsafe as we would hold on to a pointer to

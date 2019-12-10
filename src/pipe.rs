@@ -68,11 +68,11 @@ lazy_static! {
 const PIPE_BACKPRESSURE_COUNT: usize = 5;
 
 /// Wraps an Arc<> that is dropped on a separate queue
-struct LazyDrop<Core: 'static+Send> {
+struct LazyDrop<Core: 'static+Send+Unpin> {
     reference: Option<Arc<Desync<Core>>>
 }
 
-impl<Core: 'static+Send> LazyDrop<Core> {
+impl<Core: 'static+Send+Unpin> LazyDrop<Core> {
     pub fn new(reference: Arc<Desync<Core>>) -> LazyDrop<Core> {
         LazyDrop {
             reference: Some(reference)
@@ -80,7 +80,7 @@ impl<Core: 'static+Send> LazyDrop<Core> {
     }
 }
 
-impl<Core: 'static+Send> Deref for LazyDrop<Core> {
+impl<Core: 'static+Send+Unpin> Deref for LazyDrop<Core> {
     type Target = Desync<Core>;
 
     fn deref(&self) -> &Desync<Core> {
@@ -88,7 +88,7 @@ impl<Core: 'static+Send> Deref for LazyDrop<Core> {
     }
 }
 
-impl<Core: 'static+Send> Drop for LazyDrop<Core> {
+impl<Core: 'static+Send+Unpin> Drop for LazyDrop<Core> {
     fn drop(&mut self) {
         // Drop the reference down the chute (this ensures that if the Arc<Desync<X>> is freed, it won't block the monitor pipe when the contained Desync synchronises during drop)
         let reference = self.reference.take();
@@ -108,7 +108,7 @@ impl<Core: 'static+Send> Drop for LazyDrop<Core> {
 /// start draining into the `Desync` object.
 /// 
 pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn)
-where   Core:       'static+Send,
+where   Core:       'static+Send+Unpin,
         S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
         ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> () {
@@ -213,7 +213,7 @@ where   Core:       'static+Send,
 /// ```
 /// 
 pub fn pipe<Core, S, Output, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output>
-where   Core:       'static+Send,
+where   Core:       'static+Send+Unpin,
         S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
         Output:     'static+Send,
