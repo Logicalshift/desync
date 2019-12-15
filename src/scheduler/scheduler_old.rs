@@ -1,5 +1,6 @@
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
 
+use super::core::*;
 use super::job::*;
 use super::future_job::*;
 use super::unsafe_job::*;
@@ -7,15 +8,15 @@ use super::scheduler_thread::*;
 use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
+use super::wake_thread::*;
 
 use std::fmt;
 use std::thread;
-use std::thread::{Thread};
 use std::sync::*;
 use std::collections::vec_deque::*;
 
 use futures::task;
-use futures::task::{ArcWake, Context, Poll};
+use futures::task::{Context, Poll};
 use futures::channel::oneshot;
 use futures::future::{Future};
 
@@ -46,191 +47,10 @@ fn initial_max_threads() -> usize {
 }
 
 ///
-/// The scheduler core contains the internal data used by the scheduler
-///
-struct SchedulerCore {
-    /// The queues that are active in the scheduler
-    schedule: Arc<Mutex<VecDeque<Arc<JobQueue>>>>,
-
-    /// Active threads and whether or not they're busy
-    threads: Mutex<Vec<(Arc<Mutex<bool>>, SchedulerThread)>>,
-
-    /// The maximum number of threads permitted in this scheduler
-    max_threads: Mutex<usize>
-}
-
-///
 /// The scheduler is used to schedule tasks onto a pool of threads
 ///
 pub struct Scheduler {
     core: Arc<SchedulerCore>
-}
-
-///
-/// Waker that will wake the specified queue in the specified scheduler core
-///
-struct WakeQueue(Arc<JobQueue>, Arc<SchedulerCore>);
-
-///
-/// Waker that will wake the specified thread
-///
-struct WakeThread(Arc<JobQueue>, Thread);
-
-impl SchedulerCore {
-    ///
-    /// Wakes a thread to run a dormant queue. Returns true if a thread was woken up
-    ///
-    fn schedule_thread(&self, core: Arc<SchedulerCore>) -> bool {
-        // Find a dormant thread and activate it
-        let schedule = self.schedule.clone();
-
-        // Schedule work on this dormant thread
-        let work_core   = Arc::clone(&core);
-        let do_work     = move |work: Arc<JobQueue>| {
-            let waker       = Arc::new(WakeQueue(Arc::clone(&work), Arc::clone(&work_core)));
-            let waker       = task::waker_ref(&waker);
-            let mut context = Context::from_waker(&waker);
-
-            work.drain(&mut context)
-        };
-
-        if !self.schedule_dormant(move || Self::next_to_run(&schedule), do_work) {
-            // Try to create a new thread
-            if self.spawn_thread_if_less_than_maximum() {
-                // Try harder to schedule this task if a thread was created
-                self.schedule_thread(core)
-            } else {
-                // Couldn't schedule on an existing thread or create a new one
-                false
-            }
-        } else {
-            // Successfully scheduled
-            true
-        }
-    }
-
-    ///
-    /// If a queue is idle and has pending jobs, places it in the schedule
-    ///
-    fn reschedule_queue(&self, queue: &Arc<JobQueue>, core: Arc<SchedulerCore>) {
-        let reschedule = {
-            let mut core = queue.core.lock().expect("JobQueue core lock");
-
-            if core.state == QueueState::Idle {
-                // Schedule a thread to restart the queue if more things were queued
-                if core.queue.len() > 0 {
-                    // Need to schedule the queue after this event
-                    core.state = QueueState::Pending;
-                    true
-                } else {
-                    // Queue is empty and can go back to idle
-                    core.state = QueueState::Idle;
-                    false
-                }
-            } else {
-                false
-            }
-        };
-
-        if reschedule {
-            self.schedule.lock().expect("Schedule lock").push_back(queue.clone());
-            self.schedule_thread(core);
-        }
-    }
-
-    ///
-    /// Finds the next queue that should be run. If this returns successfully, the queue will 
-    /// be marked as running.
-    /// 
-    fn next_to_run(schedule: &Arc<Mutex<VecDeque<Arc<JobQueue>>>>) -> Option<Arc<JobQueue>> {
-        // Search the queues...
-        let mut schedule = schedule.lock().expect("Schedule lock");
-
-        // Find a queue where the state is pending
-        while let Some(q) = schedule.pop_front() {
-            let mut core = q.core.lock().expect("JobQueue core lock");
-
-            if core.state == QueueState::Pending {
-                // Queue is ready to run. Mark it as running and return it
-                core.state = QueueState::Running;
-                return Some(q.clone());
-            }
-        }
-
-        None
-    }
-
-    ///
-    /// Attempts to schedule a task on a dormant thread
-    ///
-    fn schedule_dormant<NextJob, RunJob, JobData>(&self, next_job: NextJob, job: RunJob) -> bool
-    where RunJob: 'static+Send+Fn(JobData) -> (), NextJob: 'static+Send+Fn() -> Option<JobData> {
-        let threads = self.threads.lock().expect("Scheduler threads lock");
-
-        // Find the first thread that is not marked as busy and schedule this task on it
-        for &(ref busy_rc, ref thread) in threads.iter() {
-            let mut busy = busy_rc.lock().expect("Thread busy lock");
-
-            if !*busy {
-                // Clone the busy mutex so we can return this thread to readiness
-                let also_busy =  busy_rc.clone();
-
-                // This thread is busy
-                *busy = true;
-                thread.run(move || {
-                    let mut done = false;
-
-                    while !done {
-                        // Obtain the next job. The thread is not busy once there are no longer any jobs
-                        // We hold the mutex while this is going on to avoid a race condition when a thread is going dormant
-                        let job_data = {
-                            let mut busy = also_busy.lock().expect("Thread busy lock");
-                            let job_data = next_job();
-
-                            // If there's no next job, then this thread is no longer busy
-                            if job_data.is_none() {
-                                *busy = false;
-                            }
-
-                            job_data
-                        };
-
-                        // Run the job if there is one, stop the thread if there is not
-                        if let Some(job_data) = job_data {
-                            job(job_data);
-                        } else {
-                            done = true;
-                        }
-                    }
-                });
-
-                return true;
-            }
-        }
-
-        // No dormant threads were found
-        false
-    }
-
-    ///
-    /// If we're running fewer than the maximum number of threads, try to spawn a new one
-    ///
-    fn spawn_thread_if_less_than_maximum(&self) -> bool {
-        let max_threads = { *self.max_threads.lock().expect("Max threads lock") };
-        let mut threads = self.threads.lock().expect("Scheduler threads lock");
-
-        if threads.len() < max_threads {
-            // Create a new thread
-            let is_busy     = Arc::new(Mutex::new(false));
-            let new_thread  = SchedulerThread::new();
-            threads.push((is_busy, new_thread));
-            
-            true
-        } else {
-            // Can't spawn a new thread
-            false
-        }
-    }
 }
 
 impl Scheduler {
@@ -756,50 +576,6 @@ impl fmt::Debug for Scheduler {
         let queue_size = format!("Pending queue count: {}", self.core.schedule.lock().expect("Schedule lock").len());
 
         fmt.write_str(&format!("{} {}", threads, queue_size))
-    }
-}
-
-impl ArcWake for WakeQueue {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        // Decompose this structure
-        let WakeQueue(ref queue, ref core) = **arc_self;
-
-        // Move the queue to the idle state if we can
-        {
-            let mut queue_core = queue.core.lock().unwrap();
-
-            // Queue can be woken if it's in the WaitingForWake state
-            match queue_core.state {
-                QueueState::WaitingForWake  => queue_core.state = QueueState::Idle,
-                QueueState::Running         => queue_core.state = QueueState::AwokenWhileRunning,
-                other_state                 => queue_core.state = other_state
-            }
-        }
-
-        // Cause the core to reschedule its events
-        core.reschedule_queue(queue, Arc::clone(core));
-    }
-}
-
-impl ArcWake for WakeThread {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        // Decompose this structure
-        let WakeThread(ref queue, ref thread) = **arc_self;
-
-        // Move the queue to the idle state if we can
-        {
-            let mut queue_core = queue.core.lock().unwrap();
-
-            // Queue can be woken if it's in the WaitingForWake state
-            match queue_core.state {
-                QueueState::WaitingForWake  => queue_core.state = QueueState::Idle,
-                QueueState::Running         => queue_core.state = QueueState::AwokenWhileRunning,
-                other_state                 => queue_core.state = other_state
-            }
-        }
-
-        // Wake the thread
-        thread.unpark();
     }
 }
 

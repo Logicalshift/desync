@@ -45,6 +45,7 @@
 //! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
+mod core;
 mod job;
 mod future_job;
 mod unsafe_job;
@@ -52,6 +53,8 @@ mod scheduler_thread;
 mod job_queue;
 mod queue_state;
 mod active_queue;
+mod wake_queue;
+mod wake_thread;
 
 mod scheduler_old;
 
