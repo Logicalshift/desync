@@ -96,6 +96,17 @@
 //! for using the results of futures to update the contents of `Desync` data: these all preserve the
 //! strict order-of-operations semantics, so operations scheduled after an `after` won't start until
 //! that operation has completed.
+//! 
+//! # Pipes and streams
+//! 
+//! As well as support for futures, Desync provides supports for streams. The `pipe_in()` and `pipe()`
+//! functions provide a way to process stream data in a desync object as it arrives. `pipe_in()` just
+//! processes stream data as it arrives, and `pipe()` provides an output stream of data.
+//! 
+//! `pipe()` is quite useful as a way to provide asynchronous access to synchronous code: it can be used
+//! to create a channel to send requests to an asynchronous target and retrieve results back via its
+//! output. (Unlike this 'traditional' method, the actual scheduling and channel maintenance does not 
+//! need to be explicitly implemented)
 //!
 //! ```
 //! 
