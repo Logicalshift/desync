@@ -8,16 +8,12 @@ use super::scheduler_thread::*;
 use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
-use super::wake_thread::*;
 use super::scheduler_future::*;
 
 use std::fmt;
-use std::thread;
 use std::sync::*;
 use std::collections::vec_deque::*;
 
-use futures::task;
-use futures::task::{Context, Poll};
 use futures::channel::oneshot;
 use futures::future::{Future};
 
@@ -390,69 +386,11 @@ impl Scheduler {
 
         // While there is no result, run a job from the queue
         while result.0.lock().expect("Sync queue result lock").is_none() {
-            if let Some(mut job) = queue.dequeue() {
-                // Queue is running
-                debug_assert!(queue.core.lock().unwrap().state == QueueState::Running);
+            match JobQueue::run_one_job_now(queue) {
+                JobStatus::Finished | JobStatus::NoJobsWaiting => { },
 
-                let waker       = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
-                let waker       = task::waker_ref(&waker);
-                let mut context = Context::from_waker(&waker);
-
-                loop {
-                    let poll_result = job.run(&mut context);
-
-                    match poll_result {
-                        // A ready result ends the loop
-                        Poll::Ready(()) => break,
-                        Poll::Pending   => {
-                            // Try to move to the parking state
-                            let should_park = {
-                                let mut core = queue.core.lock().unwrap();
-
-                                core.state = match core.state {
-                                    QueueState::AwokenWhileRunning  => QueueState::Running,
-                                    QueueState::Running             => QueueState::WaitingForWake,
-                                    other                           => panic!("Queue was in unexpected state {:?}", other)
-                                };
-
-                                core.state == QueueState::WaitingForWake
-                            };
-
-                            // Park until the queue state returns changes
-                            if should_park {
-                                // If should_park is set to false, the queue was awoken very quickly
-                                loop {
-                                    let current_state = { queue.core.lock().unwrap().state };
-                                    match current_state {
-                                        QueueState::Idle            => break,
-                                        QueueState::WaitingForWake  => (),
-                                        other                       => panic!("Queue was in unexpected state {:?}", other)
-                                    }
-
-                                    // Park until we're awoken from the other thread (once awoken, we re-check the state)
-                                    thread::park();
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                // Queue may have suspended (or gone to suspending and back to running)
-                let wait_in_background = {
-                    let mut core = queue.core.lock().expect("JobQueue core lock");
-                    if core.state == QueueState::Suspending {
-                        // Finish suspension, then wait for job to complete
-                        core.state = QueueState::Suspended;
-                        true
-                    } else {
-                        // Queue is still running
-                        debug_assert!(core.state == QueueState::Running);
-                        false
-                    }
-                };
-
-                if wait_in_background {
-                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs.
+                JobStatus::WaitInBackground => {
+                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs, so wait on the result
                     while result.0.lock().expect("Sync queue result lock").is_none() {
                         // Park until the result becomes available
                         let parking = &result.1;

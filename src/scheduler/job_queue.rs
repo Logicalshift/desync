@@ -2,11 +2,14 @@
 use super::job::*;
 use super::active_queue::*;
 use super::queue_state::*;
+use super::wake_thread::*;
 
 use std::fmt;
 use std::sync::*;
+use std::thread;
 use std::collections::vec_deque::*;
 
+use futures::task;
 use futures::task::{Context, Poll};
 
 ///
@@ -15,6 +18,20 @@ use futures::task::{Context, Poll};
 pub struct JobQueue {
     /// The shared data for this queue is stored within a mutex
     pub (super) core: Mutex<JobQueueCore>
+}
+
+///
+/// The result of running a job
+///
+pub (super) enum JobStatus {
+    /// No jobs were waiting on the queue
+    NoJobsWaiting,
+
+    /// Job was run successfully
+    Finished,
+
+    /// The job caused the queue to suspend: it will be rescheduled in the background
+    WaitInBackground
 }
 
 ///
@@ -137,6 +154,81 @@ impl JobQueue {
                     // Will restart when we get re-scheduled
                     done = true;
                 }
+            }
+        }
+    }
+
+    ///
+    /// With the queue already in the running state, dequeues a single job and runs it synchronously on the current thread
+    ///
+    pub (super) fn run_one_job_now(queue: &Arc<JobQueue>) -> JobStatus {
+        if let Some(mut job) = queue.dequeue() {
+            // Queue is running
+            debug_assert!(queue.core.lock().unwrap().state == QueueState::Running);
+
+            let waker       = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
+            let waker       = task::waker_ref(&waker);
+            let mut context = Context::from_waker(&waker);
+
+            loop {
+                let poll_result = job.run(&mut context);
+
+                match poll_result {
+                    // A ready result ends the loop
+                    Poll::Ready(()) => break,
+                    Poll::Pending   => {
+                        // Try to move to the parking state
+                        let should_park = {
+                            let mut core = queue.core.lock().unwrap();
+
+                            core.state = match core.state {
+                                QueueState::AwokenWhileRunning  => QueueState::Running,
+                                QueueState::Running             => QueueState::WaitingForWake,
+                                other                           => panic!("Queue was in unexpected state {:?}", other)
+                            };
+
+                            core.state == QueueState::WaitingForWake
+                        };
+
+                        // Park until the queue state returns changes
+                        if should_park {
+                            // If should_park is set to false, the queue was awoken very quickly
+                            loop {
+                                let current_state = { queue.core.lock().unwrap().state };
+                                match current_state {
+                                    QueueState::Idle            => break,
+                                    QueueState::WaitingForWake  => (),
+                                    other                       => panic!("Queue was in unexpected state {:?}", other)
+                                }
+
+                                // Park until we're awoken from the other thread (once awoken, we re-check the state)
+                                thread::park();
+                            }
+                        }
+                    }
+                }
+            }
+
+            JobStatus::Finished
+        } else {
+            // Queue may have suspended (or gone to suspending and back to running)
+            let wait_in_background = {
+                let mut core = queue.core.lock().expect("JobQueue core lock");
+                if core.state == QueueState::Suspending {
+                    // Finish suspension, then wait for job to complete
+                    core.state = QueueState::Suspended;
+                    true
+                } else {
+                    // Queue is still running
+                    debug_assert!(core.state == QueueState::Running);
+                    false
+                }
+            };
+
+            if wait_in_background {
+                JobStatus::WaitInBackground
+            } else {
+                JobStatus::NoJobsWaiting
             }
         }
     }
