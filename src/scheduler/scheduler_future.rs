@@ -150,7 +150,10 @@ enum SchedulerAction<T> {
     WaitForCompletion,
 
     /// Future has already completed: we should return the value to sender
-    ReturnValue(T)
+    ReturnValue(T),
+
+    /// We've claimed the 'running' state of the queue and should drain it
+    DrainQueue
 }
 
 impl<T> Future for SchedulerFuture<T> {
@@ -177,7 +180,8 @@ impl<T> Future for SchedulerFuture<T> {
 
         match next_action {
             SchedulerAction::WaitForCompletion  => task::Poll::Pending,
-            SchedulerAction::ReturnValue(value) => task::Poll::Ready(value)
+            SchedulerAction::ReturnValue(value) => task::Poll::Ready(value),
+            SchedulerAction::DrainQueue         => unimplemented!()
         }
     }
 }
