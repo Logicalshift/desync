@@ -9,6 +9,7 @@ use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
 use super::wake_thread::*;
+use super::scheduler_future::*;
 
 use std::fmt;
 use std::thread;
@@ -224,7 +225,7 @@ impl Scheduler {
     where   TFn:                'static+Send+FnOnce() -> TFuture,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
-        let (send, receive) = oneshot::channel();
+        let (receive, send) = SchedulerFuture::new(queue);
 
         let perform_job = FutureJob::new(move || {
             // Create the job when we're queued up
@@ -235,7 +236,7 @@ impl Scheduler {
                 let val = job.await;
 
                 // Send to the channel
-                send.send(val).ok();
+                send.signal(val);
             }
         });
 
@@ -252,7 +253,7 @@ impl Scheduler {
     ///
     pub fn after<TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(Fut::Output) -> Res {
-        let (send, receive) = oneshot::channel();
+        let (receive, send) = SchedulerFuture::new(queue);
 
         // Create a future that will perform the job
         let perform_job = FutureJob::new(move || { async {
@@ -263,7 +264,7 @@ impl Scheduler {
                 let result = job(val);
 
                 // Signal the channel
-                send.send(result).ok();
+                send.signal(result);
             }
         });
 
