@@ -123,10 +123,5 @@ pub mod scheduler;
 pub mod desync;
 pub mod pipe;
 
-mod job;
-mod future_job;
-mod unsafe_job;
-mod scheduler_thread;
-
 pub use self::desync::*;
 pub use self::pipe::*;
