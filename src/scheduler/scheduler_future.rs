@@ -1,4 +1,5 @@
 use super::job_queue::*;
+use super::queue_state::*;
 
 use futures::prelude::*;
 use futures::channel::oneshot;
@@ -45,28 +46,6 @@ pub struct SchedulerFuture<T> {
 
     /// A container for the result of this scheduler future
     result: Arc<Mutex<SchedulerFutureResult<T>>>
-}
-
-impl<T> SchedulerFuture<T> {
-    ///
-    /// Creates a new scheduler future and the result needed to signal it
-    ///
-    pub (super) fn new(queue: &Arc<JobQueue>) -> (SchedulerFuture<T>, SchedulerFutureSignaller<T>) {
-        // Create an unfinished result
-        let result = SchedulerFutureResult {
-            result: FutureResultState::None,
-            waker:  None
-        };
-        let result = Arc::new(Mutex::new(result));
-
-        // Insert into a future
-        let future = SchedulerFuture {
-            queue:  Arc::clone(queue),
-            result: Arc::clone(&result)
-        };
-
-        (future, SchedulerFutureSignaller(result))
-    }
 }
 
 impl<T> FutureResultState<T> {
@@ -153,7 +132,39 @@ enum SchedulerAction<T> {
     ReturnValue(T),
 
     /// We've claimed the 'running' state of the queue and should drain it
-    DrainQueue
+    DrainQueue,
+
+    /// The queue has panicked
+    Panic
+}
+
+impl<T> SchedulerFuture<T> {
+    ///
+    /// Creates a new scheduler future and the result needed to signal it
+    ///
+    pub (super) fn new(queue: &Arc<JobQueue>) -> (SchedulerFuture<T>, SchedulerFutureSignaller<T>) {
+        // Create an unfinished result
+        let result = SchedulerFutureResult {
+            result: FutureResultState::None,
+            waker:  None
+        };
+        let result = Arc::new(Mutex::new(result));
+
+        // Insert into a future
+        let future = SchedulerFuture {
+            queue:  Arc::clone(queue),
+            result: Arc::clone(&result)
+        };
+
+        (future, SchedulerFutureSignaller(result))
+    }
+
+    ///
+    /// We moved the queue into the running state and need to drain it until we've got a result
+    ///
+    fn drain_queue(&mut self) -> task::Poll<Result<T, oneshot::Canceled>> {
+        unimplemented!()
+    }
 }
 
 impl<T> Future for SchedulerFuture<T> {
@@ -162,7 +173,7 @@ impl<T> Future for SchedulerFuture<T> {
     ///
     /// Polls this future
     ///
-    fn poll(self: Pin<&mut Self>, context: &mut task::Context) -> task::Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, context: &mut task::Context) -> task::Poll<Self::Output> {
         // Lock the result and determine which action to take
         let next_action = {
             let mut future_result = self.result.lock().unwrap();
@@ -171,17 +182,36 @@ impl<T> Future for SchedulerFuture<T> {
                 // The result is available: we should return it immediately
                 SchedulerAction::ReturnValue(result)
             } else {
-                // Wake us up when the future is available
-                future_result.waker = Some(context.waker().clone());
+                // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+                let run_action = {
+                    let mut core = self.queue.core.lock().expect("JobQueue core lock");
 
-                SchedulerAction::WaitForCompletion
+                    match core.state {
+                        QueueState::Suspended           => SchedulerAction::WaitForCompletion,
+                        QueueState::Suspending          => SchedulerAction::WaitForCompletion,
+                        QueueState::Running             => SchedulerAction::WaitForCompletion,
+                        QueueState::WaitingForWake      => SchedulerAction::WaitForCompletion,
+                        QueueState::AwokenWhileRunning  => SchedulerAction::WaitForCompletion,
+                        QueueState::Panicked            => SchedulerAction::Panic,
+                        QueueState::Pending             => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
+                        QueueState::Idle                => { core.state = QueueState::Running; SchedulerAction::DrainQueue }
+                    }
+                };
+
+                if let SchedulerAction::WaitForCompletion = run_action {
+                    // Wake us up when the future is available
+                    future_result.waker = Some(context.waker().clone());
+                }
+
+                run_action
             }
         };
 
         match next_action {
             SchedulerAction::WaitForCompletion  => task::Poll::Pending,
             SchedulerAction::ReturnValue(value) => task::Poll::Ready(value),
-            SchedulerAction::DrainQueue         => unimplemented!()
+            SchedulerAction::DrainQueue         => self.drain_queue(),
+            SchedulerAction::Panic              => panic!("Cannot schedule jobs on a panicked queue"),
         }
     }
 }
