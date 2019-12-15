@@ -45,6 +45,7 @@
 //! and `sync` can be used to perform operations where data is returned to the calling thread.
 //!
 
+mod desync_scheduler;
 mod core;
 mod job;
 mod future_job;
@@ -56,7 +57,5 @@ mod active_queue;
 mod wake_queue;
 mod wake_thread;
 
-mod scheduler_old;
-
-pub use self::scheduler_old::*;
+pub use self::desync_scheduler::*;
 pub use self::job_queue::{JobQueue};
