@@ -23,22 +23,6 @@ struct SchedulerFutureResult<T> {
 ///
 pub (super) struct SchedulerFutureSignaller<T>(Arc<Mutex<SchedulerFutureResult<T>>>);
 
-impl<T> Drop for SchedulerFutureSignaller<T> {
-    fn drop(&mut self) {
-        let mut result = self.0.lock().unwrap();
-
-        // If no result has been generated
-        if result.result.is_none() {
-            // Mark the future as canceled
-            result.result = Some(Err(oneshot::Canceled));
-
-            // Wake up anything that was polling it
-            let waker = result.waker.take();
-            waker.map(|waker| waker.wake());
-        }
-    }
-}
-
 ///
 /// Future representing a task pending on a scheduler
 /// 
@@ -75,6 +59,49 @@ impl<T> SchedulerFuture<T> {
     }
 }
 
+impl<T> Drop for SchedulerFutureSignaller<T> {
+    fn drop(&mut self) {
+        let waker = {
+            let mut future_result = self.0.lock().unwrap();
+
+            // If no result has been generated
+            if future_result.result.is_none() {
+                // Mark the future as canceled
+                future_result.result = Some(Err(oneshot::Canceled));
+
+                // Wake up anything that was polling it
+                let waker = future_result.waker.take();
+                waker
+            } else {
+                // Result is already set, so don't wake anything up
+                None
+            }
+        };
+
+        // If we need to wake the future, then do so here (note that we're outside of the lock when we do this)
+        waker.map(|waker| waker.wake());
+    }
+}
+
+impl<T> SchedulerFutureSignaller<T> {
+    ///
+    /// Signals that the result of the calculation is available
+    ///
+    fn signal(self, result: T) {
+        let waker = {
+            let mut future_result = self.0.lock().unwrap();
+
+            // Set the result
+            future_result.result = Some(Ok(result));
+
+            // Retrieve the waker
+            future_result.waker.take()
+        };
+
+        // If we retrieved a waker from the result, wake it up
+        waker.map(|waker| waker.wake());
+    }
+}
 impl<T> Future for SchedulerFuture<T> {
     type Output = Result<T, oneshot::Canceled>;
 
