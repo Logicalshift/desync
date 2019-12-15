@@ -1,56 +1,12 @@
-//!
-//! The scheduler provides the `JobQueue` synchronisation mechanism.
-//! 
-//! # Scheduler
-//! 
-//! The scheduler provides a new synchronisation mechanism: the `JobQueue`. You can get one
-//! by calling `scheduler::queue()`:
-//! 
-//! ```
-//! use desync::scheduler;
-//! 
-//! let queue = scheduler::queue();
-//! ```
-//! 
-//! A `JobQueue` allows jobs to be scheduled in the background. Jobs are scheduled in the order
-//! that they arrive, so anything on a queue is run synchronously with respect to the queue
-//! itself. The `desync` call can be used to schedule work:
-//! 
-//! ```
-//! # use desync::scheduler;
-//! # 
-//! # let queue = scheduler::queue();
-//! # 
-//! scheduler::desync(&queue, || println!("First job"));
-//! scheduler::desync(&queue, || println!("Second job"));
-//! scheduler::desync(&queue, || println!("Third job"));
-//! ```
-//! 
-//! These will be scheduled onto background threads created by the scheduler. There is also a
-//! `sync` method. Unlike `desync`, this can return a value from the job function it takes
-//! as a parameter and doesn't return until its job has completed:
-//! 
-//! ```
-//! # use desync::scheduler;
-//! # 
-//! # let queue = scheduler::queue();
-//! #
-//! scheduler::desync(&queue, || println!("In the background"));
-//! let someval = scheduler::sync(&queue, || { println!("In the foreground"); 42 });
-//! # assert!(someval == 42);
-//! ```
-//! 
-//! As queues are synchronous with themselves, it's possible to access data without needing
-//! extra synchronisation primitives: `desync` is perfect for updating data in the background
-//! and `sync` can be used to perform operations where data is returned to the calling thread.
-//!
-
 // TODO: need to make it safe to drop a suspended queue (well, a suspended Desync)
 
 use super::job::*;
 use super::future_job::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
+use super::job_queue::*;
+use super::queue_state::*;
+use super::active_queue::*;
 
 use std::fmt;
 use std::thread;
@@ -71,23 +27,6 @@ const MIN_THREADS: usize = 8;
 
 lazy_static! {
     static ref SCHEDULER: Arc<Scheduler> = Arc::new(Scheduler::new());
-}
-
-///
-/// Struct that holds the currently active queue and marks it as panicked if dropped during a panic
-///
-struct ActiveQueue<'a> {
-    queue: &'a JobQueue
-}
-
-impl<'a> Drop for ActiveQueue<'a> {
-    fn drop(&mut self) {
-        if thread::panicking() {
-            self.queue.core.lock()
-                .map(|mut core| core.state = QueueState::Panicked)
-                .ok();
-        }
-    }
 }
 
 ///
@@ -136,169 +75,6 @@ struct WakeQueue(Arc<JobQueue>, Arc<SchedulerCore>);
 /// Waker that will wake the specified thread
 ///
 struct WakeThread(Arc<JobQueue>, Thread);
-
-///
-/// Represents the state of a job queue
-///
-#[derive(PartialEq, Debug, Clone, Copy)]
-enum QueueState {
-    /// Queue is currently not running and not ready to run
-    Idle,
-
-    /// Queue has been queued up to run but isn't running yet
-    Pending,
-
-    /// Queue has been assigned to a thread and is currently running
-    Running,
-
-    /// A job on the queue has indicated that it's waiting to be re-awakened (by the scheduler)
-    WaitingForWake,
-
-    /// A wake-up call was made while the queue was in the running state
-    AwokenWhileRunning,
-
-    /// Queue received a panic and is no longer able to be scheduled
-    Panicked,
-
-    /// Queue is running but should suspend instead of running the next step
-    Suspending,
-
-    /// Queue has been suspended and won't run futher jobs until it is re-awakened
-    Suspended
-}
-
-///
-/// Structure protected by the jobqueue matrix
-///
-struct JobQueueCore {
-    /// The jobs that are scheduled on this queue
-    queue: VecDeque<Box<dyn ScheduledJob>>,
-
-    /// The current state of this queue
-    state: QueueState,
-    
-    /// How many times this queue has been suspended (can be negative to indicate the suspension ended before it began)
-    suspension_count: i32
-}
-
-///
-/// A job queue provides a list of jobs to perform in order
-/// 
-pub struct JobQueue {
-    /// The shared data for this queue is stored within a mutex
-    core: Mutex<JobQueueCore>
-}
-
-impl fmt::Debug for JobQueue {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        let core = self.core.lock().expect("JobQueue core lock");
-
-        fmt.write_str(&format!("JobQueue: State: {:?}, Pending: {}", core.state, core.queue.len()))
-    }
-}
-
-impl JobQueue {
-    ///
-    /// Creates a new job queue 
-    ///
-    fn new() -> JobQueue {
-        JobQueue { 
-            core: Mutex::new(JobQueueCore {
-                queue:              VecDeque::new(),
-                state:              QueueState::Idle,
-                suspension_count:   0
-            })
-        }
-    }
-
-    ///
-    /// If there are any jobs waiting, dequeues the next one
-    ///
-    fn dequeue(&self) -> Option<Box<dyn ScheduledJob>> {
-        let mut core = self.core.lock().expect("JobQueue core lock");
-
-        match core.state {
-            QueueState::Suspending      => None,
-            QueueState::WaitingForWake  => None,
-            other                       => {
-                debug_assert!(other == QueueState::Running);
-                core.queue.pop_front()
-            }
-        }
-    }
-
-    ///
-    /// Adds a job to the front of the queue (so it's the next one to run)
-    ///
-    fn requeue(&self, job: Box<dyn ScheduledJob>) {
-        let mut core = self.core.lock().expect("JobQueue core lock");
-
-        core.queue.push_front(job);
-    }
-
-    ///
-    /// Runs jobs on this queue until there are none left, marking the job as inactive when done
-    /// 
-    fn drain(&self, context: &mut Context) {
-        let _active = ActiveQueue { queue: self };
-
-        debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-        let mut done = false;
-
-        while !done {
-            // Run jobs until the queue is drained or blocks
-            while let Some(mut job) = self.dequeue() {
-                debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
-
-                let poll_result = job.run(context);
-
-                match poll_result {
-                    Poll::Ready(()) => { },
-                    Poll::Pending   => { 
-                        // Job needs requeing
-                        self.requeue(job);
-
-                        // Queue should move from the 'running' state to the 'waiting for wake' state
-                        let mut core = self.core.lock().expect("JobQueue core lock");
-
-                        core.state = match core.state {
-                            QueueState::Running             => QueueState::WaitingForWake,
-                            QueueState::AwokenWhileRunning  => QueueState::Running,
-                            other                           => other
-                        };
-
-                        if core.state == QueueState::WaitingForWake {
-                            return;
-                        }
-                    }
-                }
-            }
-
-            // Try to move back to the 'not running' state
-            {
-                let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
-
-                // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
-                if core.queue.len() == 0 {
-                    core.state = match core.state {
-                        QueueState::Running         => QueueState::Idle,
-                        QueueState::Suspending      => QueueState::Suspended,
-                        x                           => x
-                    };
-                    done = true;
-                } else if core.state == QueueState::Suspending {
-                    // Stop draining as we're suspending
-                    core.state = QueueState::Suspended;
-                    done = true;
-                } else if core.state == QueueState::Pending {
-                    // Will restart when we get re-scheduled
-                    done = true;
-                }
-            }
-        }
-    }
-}
 
 impl SchedulerCore {
     ///
