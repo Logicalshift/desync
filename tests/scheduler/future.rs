@@ -26,6 +26,29 @@ fn schedule_future() {
 }
 
 #[test]
+fn schedule_future_with_no_threads_of_our_own() {
+    timeout(|| {
+        use futures::executor;
+
+        let scheduler   = Scheduler::new();
+
+        // Even with 0 threads, futures should still run (by draining on the current thread as for sync actions)
+        scheduler.set_max_threads(0);
+        scheduler.despawn_threads_if_overloaded();
+
+        let queue       = queue();
+        let future      = scheduler.future(&queue, move || async {
+            thread::sleep(Duration::from_millis(100));
+            42
+        });
+
+        executor::block_on(async {
+            assert!(future.await.unwrap() == 42);
+        });
+    }, 500);
+}
+
+#[test]
 fn wait_for_future() {
     timeout(|| {
         use futures::executor;
