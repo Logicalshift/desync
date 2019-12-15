@@ -1,10 +1,26 @@
 //!
 //! # Desync
 //! 
-//! This library provides an alternative synchronisation mechanism to the usual threads/mutexes
-//! system. Instead of managing the threads, this focuses on managing the data, which largely
-//! does away with the need for many synchronisation primitives. Support for futures is provided
-//! to help interoperate with other Rust libraries.
+//! 
+//! This is a library for Rust that provides a model of concurrency based around the idea of 
+//! scheduling operations on data. This is in contrast to the traditional model where operations
+//! are scheduled on threads with ownership of the data being passed between them.
+//! 
+//! This approach has several advantages over the traditional method:
+//! 
+//!  * It's simpler: almost the  entire set of thread methods and synchronisation primitives can 
+//!    be replaced with the two fundamental scheduling functions, `sync()` and `desync()`. 
+//!  * It's easier to reason about: scheduled operations are always performed in the order they're 
+//!    queued so race conditions and similar issues due to out-of-order execution are both much rarer 
+//!    and easier to debug.
+//!  * It makes it easier to write highly concurrent code: desync makes moving between performing
+//!    operations synchronously and asynchronously trivial, with no need to deal with adding code to
+//!    start threads or communicate between them.
+//! 
+//! In addition to the two fundamental methods, desync provides methods for generating futures and
+//! processing streams.
+//! 
+//! # Quick start
 //! 
 //! There is a single new synchronisation object: `Desync`. You create one like this:
 //! 
