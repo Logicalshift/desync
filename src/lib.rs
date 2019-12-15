@@ -69,9 +69,8 @@
 //! to perform operations asynchronously, this provides a useful way to immediately parallelize
 //! long-running operations.
 //! 
-//! There's one final operation to be aware of and that's `future`. This returns a boxed Future that
-//! can be used with other libraries that use them. It's conceptually the same as `sync`, except that
-//! it doesn't wait for the operation to complete:
+//! The `future()` action returns a boxed Future that can be used with other libraries that use them. It's 
+//! conceptually the same as `sync`, except that it doesn't wait for the operation to complete:
 //! 
 //! ```
 //! # extern crate futures;
@@ -89,8 +88,15 @@
 //! #     *val = 42;
 //! # });
 //! let future_number = number.future(|val| future::ready(*val));
-//! assert!(executor::block_on(async { future_number.await.unwrap() == 42 }));
+//! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
+//! 
+//! Note that this is the equivalent of just `number.sync(|val| *val)`, so this is mainly useful for
+//! interacting with other code that's already using futures. The `after()` function is also provided
+//! for using the results of futures to update the contents of `Desync` data: these all preserve the
+//! strict order-of-operations semantics, so operations scheduled after an `after` won't start until
+//! that operation has completed.
+//!
 //! ```
 //! 
 

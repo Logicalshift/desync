@@ -70,9 +70,15 @@ a future that runs asynchronously on a `Desync` object but - unlike `desync()` c
 It works like this:
 
 ```Rust
-let future_number = number.future(|val| *val);
-assert!(executor::block_on(async { future_number.await.unwrap() == 42 }))
+let future_number = number.future(|val| future::ready(*val));
+assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 )
 ```
+
+Note that this is the equivalent of just `number.sync(|val| *val)`, so this is mainly useful for
+interacting with other code that's already using futures. The `after()` function is also provided
+for using the results of futures to update the contents of `Desync` data: these all preserve the
+strict order-of-operations semantics, so operations scheduled after an `after` won't start until
+that operation has completed.
 
 There is also support for streams, via the `pipe_in()` and `pipe()` functions. These work on
 `Arc<Desync<T>>` references and provide a way to process a stream asynchronously. These two
