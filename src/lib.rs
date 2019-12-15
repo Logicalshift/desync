@@ -90,6 +90,7 @@
 //! let future_number = number.future(|val| future::ready(*val));
 //! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
+//! ```
 //! 
 //! Note that this is the equivalent of just `number.sync(|val| *val)`, so this is mainly useful for
 //! interacting with other code that's already using futures. The `after()` function is also provided
@@ -107,8 +108,6 @@
 //! to create a channel to send requests to an asynchronous target and retrieve results back via its
 //! output. (Unlike this 'traditional' method, the actual scheduling and channel maintenance does not 
 //! need to be explicitly implemented)
-//!
-//! ```
 //! 
 
 #![warn(bare_trait_objects)]
