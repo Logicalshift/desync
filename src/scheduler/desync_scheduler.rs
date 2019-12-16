@@ -221,7 +221,7 @@ impl Scheduler {
     where   TFn:                'static+Send+FnOnce() -> TFuture,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
-        let (receive, send) = SchedulerFuture::new(queue);
+        let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         let perform_job = FutureJob::new(move || {
             // Create the job when we're queued up
@@ -249,7 +249,7 @@ impl Scheduler {
     ///
     pub fn after<TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, queue: &Arc<JobQueue>, after: Fut, job: TFn) -> impl Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(Fut::Output) -> Res {
-        let (receive, send) = SchedulerFuture::new(queue);
+        let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         // Create a future that will perform the job
         let perform_job = FutureJob::new(move || { async {

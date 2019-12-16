@@ -1,5 +1,7 @@
 use super::job_queue::*;
 use super::queue_state::*;
+use super::core::*;
+use super::active_queue::*;
 
 use futures::prelude::*;
 use futures::channel::oneshot;
@@ -43,6 +45,9 @@ pub (super) struct SchedulerFutureSignaller<T>(Arc<Mutex<SchedulerFutureResult<T
 pub struct SchedulerFuture<T> {
     /// The queue which will eventually evaluate the result of this future
     queue: Arc<JobQueue>,
+
+    /// The scheduler core that this future belongs to
+    scheduler: Arc<SchedulerCore>,
 
     /// A container for the result of this scheduler future
     result: Arc<Mutex<SchedulerFutureResult<T>>>
@@ -143,7 +148,7 @@ impl<T> SchedulerFuture<T> {
     ///
     /// Creates a new scheduler future and the result needed to signal it
     ///
-    pub (super) fn new(queue: &Arc<JobQueue>) -> (SchedulerFuture<T>, SchedulerFutureSignaller<T>) {
+    pub (super) fn new(queue: &Arc<JobQueue>, core: Arc<SchedulerCore>) -> (SchedulerFuture<T>, SchedulerFutureSignaller<T>) {
         // Create an unfinished result
         let result = SchedulerFutureResult {
             result: FutureResultState::None,
@@ -153,8 +158,9 @@ impl<T> SchedulerFuture<T> {
 
         // Insert into a future
         let future = SchedulerFuture {
-            queue:  Arc::clone(queue),
-            result: Arc::clone(&result)
+            queue:      Arc::clone(queue),
+            scheduler:  core,
+            result:     Arc::clone(&result)
         };
 
         (future, SchedulerFutureSignaller(result))
@@ -164,7 +170,41 @@ impl<T> SchedulerFuture<T> {
     /// We moved the queue into the running state and need to drain it until we've got a result
     ///
     fn drain_queue(&mut self) -> task::Poll<Result<T, oneshot::Canceled>> {
-        unimplemented!()
+        debug_assert!(self.queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+
+        // Set the queue as active
+        let _active     = ActiveQueue { queue: &*self.queue };
+        let mut result;
+
+        // While there is no result, run a job from the queue
+        loop {
+            // See if the result has arrived yet
+            result = self.result.lock().unwrap().result.take();
+            if !result.is_none() { break; }
+
+            // Run the next job in the queue
+            match JobQueue::run_one_job_now(&self.queue) {
+                JobStatus::Finished | JobStatus::NoJobsWaiting => { },
+
+                JobStatus::WaitInBackground => {
+                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs, so we need to wait on the result
+                    // 
+                    // TODO: we need to set the waker and return pending
+                    unimplemented!()
+                }
+            }
+        }
+
+        // Reschedule the queue if there are any events left pending
+        // Note: the queue is already pending when we start running events from it here.
+        // This means it'll get dequeued by a thread eventually: maybe while it's running
+        // here. As we've set the queue state to running while we're busy, the thread won't
+        // start the queue while it's already running.
+        self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
+        self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+
+        // Result must be available by this point
+        task::Poll::Ready(result.unwrap())
     }
 }
 
