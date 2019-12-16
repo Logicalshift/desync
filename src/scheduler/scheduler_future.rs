@@ -169,7 +169,7 @@ impl<T> SchedulerFuture<T> {
     ///
     /// We moved the queue into the running state and need to drain it until we've got a result
     ///
-    fn drain_queue(&mut self) -> task::Poll<Result<T, oneshot::Canceled>> {
+    fn drain_queue(&mut self, context: &mut task::Context) -> task::Poll<Result<T, oneshot::Canceled>> {
         debug_assert!(self.queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
 
         // Set the queue as active
@@ -188,9 +188,8 @@ impl<T> SchedulerFuture<T> {
 
                 JobStatus::WaitInBackground => {
                     // After we ran the thread, it suspended. It will be rescheduled in the background before it runs, so we need to wait on the result
-                    // 
-                    // TODO: we need to set the waker and return pending
-                    unimplemented!()
+                    self.result.lock().unwrap().waker = Some(context.waker().clone());
+                    return task::Poll::Pending;
                 }
             }
         }
@@ -251,7 +250,7 @@ impl<T> Future for SchedulerFuture<T> {
         match next_action {
             SchedulerAction::WaitForCompletion  => task::Poll::Pending,
             SchedulerAction::ReturnValue(value) => task::Poll::Ready(value),
-            SchedulerAction::DrainQueue         => self.drain_queue(),
+            SchedulerAction::DrainQueue         => self.drain_queue(context),
             SchedulerAction::Panic              => panic!("Cannot schedule jobs on a panicked queue"),
         }
     }
