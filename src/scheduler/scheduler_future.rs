@@ -183,6 +183,8 @@ impl<T> SchedulerFuture<T> {
             if !result.is_none() { break; }
 
             // Run the next job in the queue
+            // TODO: if the job is a future, we should consider returning pending if the future indicates it's pending (we block the thread to 
+            // wait for it right now)
             match JobQueue::run_one_job_now(&self.queue) {
                 JobStatus::Finished | JobStatus::NoJobsWaiting => { },
 
