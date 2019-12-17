@@ -26,7 +26,7 @@ fn schedule_future() {
 }
 
 #[test]
-fn schedule_future_with_no_threads_of_our_own() {
+fn schedule_future_with_no_scheduler_threads() {
     timeout(|| {
         use futures::executor;
 
@@ -44,6 +44,38 @@ fn schedule_future_with_no_threads_of_our_own() {
 
         executor::block_on(async {
             assert!(future.await.unwrap() == 42);
+        });
+    }, 500);
+}
+
+#[test]
+fn wake_future_with_no_scheduler_threads() {
+    timeout(|| {
+        use futures::executor;
+
+        let (tx, rx)    = oneshot::channel::<i32>();
+        let scheduler   = Scheduler::new();
+
+        // Even with 0 threads, futures should still run (by draining on the current thread as for sync actions)
+        scheduler.set_max_threads(0);
+        scheduler.despawn_threads_if_overloaded();
+
+        // Schedule a future that will block until we send a value
+        let queue       = queue();
+        let future      = scheduler.future(&queue, move || async {
+            rx.await.expect("Receive result")
+        });
+
+        // Schedule a thread that will send a value
+        thread::spawn(move || {
+            // Wait for a bit before sending the result so the future should block
+            thread::sleep(Duration::from_millis(100));
+
+            tx.send(42).expect("Send")
+        });
+
+        executor::block_on(async {
+            assert!(future.await.expect("result") == 42);
         });
     }, 500);
 }
