@@ -488,6 +488,7 @@ impl Scheduler {
                 QueueState::Suspending          => RunAction::WaitForBackground,
                 QueueState::Running             => RunAction::WaitForBackground,
                 QueueState::WaitingForWake      => RunAction::WaitForBackground,
+                QueueState::WaitingForPoll      => RunAction::WaitForBackground,
                 QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
                 QueueState::Panicked            => RunAction::Panic,
                 QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },

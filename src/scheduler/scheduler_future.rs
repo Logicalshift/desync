@@ -184,7 +184,8 @@ impl<T> SchedulerFuture<T> {
 
             // Run the next job in the queue
             // TODO: if the job is a future, we should consider returning pending if the future indicates it's pending (we block the thread to 
-            // wait for it right now)
+            // wait for it right now). One problem is that we need to properly handle waking up the queue when it's in the WaitingForWake state
+            // - as we could have set it or another thread could have
             match JobQueue::run_one_job_now(&self.queue) {
                 JobStatus::Finished | JobStatus::NoJobsWaiting => { },
 
@@ -235,6 +236,7 @@ impl<T> Future for SchedulerFuture<T> {
                         QueueState::WaitingForWake      => SchedulerAction::WaitForCompletion,
                         QueueState::AwokenWhileRunning  => SchedulerAction::WaitForCompletion,
                         QueueState::Panicked            => SchedulerAction::Panic,
+                        QueueState::WaitingForPoll      => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
                         QueueState::Pending             => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
                         QueueState::Idle                => { core.state = QueueState::Running; SchedulerAction::DrainQueue }
                     }

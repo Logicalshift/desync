@@ -15,6 +15,9 @@ pub (super) enum QueueState {
     /// A job on the queue has indicated that it's waiting to be re-awakened (by the scheduler)
     WaitingForWake,
 
+    /// We've returned from a polling operation and are waiting to be resumed
+    WaitingForPoll,
+
     /// A wake-up call was made while the queue was in the running state
     AwokenWhileRunning,
 
