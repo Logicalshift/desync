@@ -57,6 +57,8 @@ mod active_queue;
 mod wake_queue;
 mod wake_thread;
 mod scheduler_future;
+mod queue_resumer;
 
 pub use self::desync_scheduler::*;
 pub use self::job_queue::{JobQueue};
+pub use self::queue_resumer::{QueueResumer};

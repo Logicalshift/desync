@@ -25,8 +25,8 @@ fn suspend_queue() {
             desync(&queue, move || { tx2.send(*pos2.lock().unwrap()).unwrap(); });
 
             // Suspend after the first send
-            let suspended = scheduler.suspend(&queue);
-            executor::block_on(suspended).unwrap();
+            let suspended   = scheduler.suspend(&queue);
+            let resumer     = executor::block_on(suspended).unwrap();
 
             // Send again
             let pos2 = pos.clone();
@@ -40,7 +40,7 @@ fn suspend_queue() {
 
             // Update the position and resume
             *pos.lock().unwrap() = 1;
-            scheduler.resume(&queue);
+            resumer.resume();
 
             // The resumption will send us a value when it occurs
             assert!(rx.recv().unwrap() == 1);
@@ -64,14 +64,17 @@ fn suspend_queue_with_local_drain() {
         scheduler.desync(&queue, ||{});
 
         // Start suspending the queue
-        let suspended = scheduler.suspend(&queue);
+        let suspended   = scheduler.suspend(&queue);
+        let resumer     = executor::block_on(suspended).unwrap();
 
         // Resume after a delay
-        let to_resume           = queue.clone();
         let resume_scheduler    = scheduler.clone();
         thread::spawn(move || {
+            // Wait 100ms with the queue suspended
             thread::sleep(Duration::from_millis(100));
-            resume_scheduler.resume(&to_resume);
+
+            // Resume it
+            resumer.resume();
 
             // The scheduler will need to be able to finish the task on a thread
             resume_scheduler.set_max_threads(1);
@@ -79,39 +82,7 @@ fn suspend_queue_with_local_drain() {
 
         // Should be able to retrieve a value once the queue resumes
         assert!(scheduler.sync(&queue, || 42) == 42);
-
-        // Check that suspension actually occurred (as we have 0 threads, it'll get queued with the 'retrieve' request above 
-        // so it would get cancelled by the resume if we blocked earlier)
-        executor::block_on(suspended).unwrap();
     }, 500);
-}
-
-#[test]
-fn resume_before_suspend() {
-    for _x in 0..1000 {
-        timeout(|| {
-            use futures::executor;
-            use futures::channel::oneshot;
-
-            let (tx, rx)        = channel();
-            let queue           = queue();
-            let scheduler       = scheduler();
-
-            // Increment the position, suspend the queue, increment it again
-            let tx2             = tx.clone();
-            desync(&queue, move || { tx2.send(1).unwrap(); });
-            scheduler.resume(&queue);
-            let wont_suspend    = scheduler.suspend(&queue);
-            let tx2             = tx.clone();
-            desync(&queue, move || { tx2.send(2).unwrap(); });
-
-            // As we resumed then suspended, the suspension gets canceled, which we can detect via the error
-            assert!(executor::block_on(wont_suspend) == Err(oneshot::Canceled));
-
-            assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(1));
-            assert!(rx.recv_timeout(Duration::from_millis(100)) == Ok(2));
-        }, 500);
-    }
 }
 
 #[test]

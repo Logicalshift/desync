@@ -9,6 +9,7 @@ use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
 use super::scheduler_future::*;
+use super::queue_resumer::*;
 
 use std::fmt;
 use std::sync::*;
@@ -274,66 +275,26 @@ impl Scheduler {
     ///
     /// Requests that a queue be suspended once it has finished all of its active jobs
     ///
-    pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Output=Result<(), oneshot::Canceled>>+Send {
-        let (suspended, will_be_suspended)  = oneshot::channel();
-        let to_suspend                      = queue.clone();
+    pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Output=Result<QueueResumer, oneshot::Canceled>>+Send {
+        let (notify_finished_suspending, finished_suspending) = oneshot::channel();
 
-        self.desync(queue, move || {
-            // Mark the queue as suspending
-            let mut core = to_suspend.core.lock().expect("JobQueue core lock");
+        // Queue a future (we never await it though)
+        let _future = self.future(queue, move || async {
+            // Create a channel for resuming the queue
+            let (resume, wait_for_resume)   = oneshot::channel();
 
-            debug_assert!(core.state == QueueState::Running);
+            // Create a resumer for the caller to use to restart the future
+            let queue_resumer = QueueResumer { resume };
 
-            // Only actually suspend the core if it hasn't already been resumed elsewhere
-            core.suspension_count += 1;
-            if core.suspension_count == 1 {
-                core.state = QueueState::Suspending;
-            }
+            // Tell the target that this queue is suspended
+            notify_finished_suspending.send(queue_resumer).ok();
 
-            // If we suspended, then notify the future (it'll cancel if we don't actually suspend)
-            if core.suspension_count > 0 {
-                suspended.send(()).ok();
-            }
+            // Wait for it to resume
+            wait_for_resume.await.ok();
         });
 
-        will_be_suspended
-    }
-
-    ///
-    /// Resumes a queue that was previously suspended
-    ///
-    pub fn resume(&self, queue: &Arc<JobQueue>) {
-        // Reduce the amount of suspension used by a queue
-        // TODO: this is currently fairly unsafe as we can call resume extra times or not at all
-        // TODO: better might be to return a token from suspend that we can use to resume the queue (problem is: rescheduling in the right place)
-        let needs_reschedule = {
-            let mut core = queue.core.lock().expect("JobQueue core lock");
-
-            // Queue becomes less suspended
-            core.suspension_count -= 1;
-            if core.suspension_count <= 0 {
-                match core.state {
-                    QueueState::Suspended => {
-                        // If the queue was suspended and should no longer be, return it to the idle state
-                        core.state = QueueState::Idle;
-                        true
-                    },
-                    QueueState::Suspending => {
-                        // If the queue was in the process of suspending, cancel that
-                        // and resume running
-                        core.state = QueueState::Running;
-                        false
-                    },
-                    _ => false
-                }
-            } else {
-                false
-            }
-        };
-
-        if needs_reschedule {
-            self.reschedule_queue(queue);
-        }
+        // Return the finished_suspending future
+        finished_suspending
     }
 
     ///
