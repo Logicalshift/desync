@@ -195,6 +195,9 @@ impl<T> SchedulerFuture<T> {
                     },
 
                     task::Poll::Pending     => {
+                        // Requeue the job
+                        self.queue.requeue(job);
+
                         // Need to wait until we're polled again
                         self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
                         return task::Poll::Pending;
