@@ -276,10 +276,10 @@ impl Scheduler {
     /// Requests that a queue be suspended once it has finished all of its active jobs
     ///
     pub fn suspend(&self, queue: &Arc<JobQueue>) -> impl Future<Output=Result<QueueResumer, oneshot::Canceled>>+Send {
-        let (notify_finished_suspending, finished_suspending) = oneshot::channel();
+        let (finished_suspending, notify_finished_suspending) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         // Queue a future (we never await it though)
-        let _future = self.future(queue, move || async {
+        let _future = self.future(queue, move || {
             // Create a channel for resuming the queue
             let (resume, wait_for_resume)   = oneshot::channel();
 
@@ -287,10 +287,10 @@ impl Scheduler {
             let queue_resumer = QueueResumer { resume };
 
             // Tell the target that this queue is suspended
-            notify_finished_suspending.send(queue_resumer).ok();
+            notify_finished_suspending.signal(queue_resumer);
 
-            // Wait for it to resume
-            wait_for_resume.await.ok();
+            // Wait for the queue to resume
+            wait_for_resume
         });
 
         // Return the finished_suspending future
