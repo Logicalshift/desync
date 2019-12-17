@@ -183,17 +183,34 @@ impl<T> SchedulerFuture<T> {
             if !result.is_none() { break; }
 
             // Run the next job in the queue
-            // TODO: if the job is a future, we should consider returning pending if the future indicates it's pending (we block the thread to 
-            // wait for it right now). One problem is that we need to properly handle waking up the queue when it's in the WaitingForWake state
-            // - as we could have set it or another thread could have
-            match JobQueue::run_one_job_now(&self.queue) {
-                JobStatus::Finished | JobStatus::NoJobsWaiting => { },
+            if let Some(mut job) = self.queue.dequeue() {
+                // Queue is running
+                debug_assert!(self.queue.core.lock().unwrap().state == QueueState::Running);
 
-                JobStatus::WaitInBackground => {
-                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs, so we need to wait on the result
-                    self.result.lock().unwrap().waker = Some(context.waker().clone());
-                    return task::Poll::Pending;
+                let poll_result = job.run(context);
+
+                match poll_result {
+                    task::Poll::Ready(())   => {
+                        // Keep running jobs and checking the results if ready
+                    },
+
+                    task::Poll::Pending     => {
+                        // Need to wait until we're polled again
+                        self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
+                        return task::Poll::Pending;
+                    }
                 }
+            } else {
+                // Queue is empty and our result hasn't arrived yet?!
+                
+                // Assume the future will resolve eventually: move the queue in to the background
+                self.result.lock().unwrap().waker = Some(context.waker().clone());
+                
+                // Reschedule the queue
+                self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
+                self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+
+                return task::Poll::Pending;
             }
         }
 
