@@ -279,3 +279,75 @@ impl<T> Future for SchedulerFuture<T> {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use super::super::desync_scheduler::*;
+
+    #[test]
+    fn returns_immediately_if_signaled() {
+        use futures::executor;
+
+        let scheduler           = scheduler();
+        let queue               = queue();
+        let (future, signaller) = SchedulerFuture::new(&queue, Arc::clone(&scheduler.core));
+
+        signaller.signal(42);
+
+        assert!(executor::block_on(future) == Ok(42));
+    }
+
+    #[test]
+    fn cancels_when_dropped() {
+        use futures::executor;
+
+        let scheduler           = scheduler();
+        let queue               = queue();
+        let future              = { SchedulerFuture::<i32>::new(&queue, Arc::clone(&scheduler.core)).0 };
+
+        assert!(executor::block_on(future) == Err(oneshot::Canceled));
+    }
+
+    #[test]
+    fn signals_from_another_thread() {
+        use futures::executor;
+        use std::thread;
+        use std::time::Duration;
+
+        let scheduler           = scheduler();
+        let queue               = queue();
+        let (future, signaller) = SchedulerFuture::new(&queue, Arc::clone(&scheduler.core));
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+
+            signaller.signal(42);
+        });
+
+        assert!(executor::block_on(future) == Ok(42));
+    }
+
+    #[test]
+    fn forces_queue_drain() {
+        use futures::executor;
+        use std::thread;
+        use std::time::Duration;
+
+        let scheduler   = scheduler();
+        let queue       = queue();
+
+        scheduler.set_max_threads(0);
+        scheduler.despawn_threads_if_overloaded();
+
+        let (future, signaller) = SchedulerFuture::new(&queue, Arc::clone(&scheduler.core));
+
+        scheduler.desync(&queue, move || {
+            thread::sleep(Duration::from_millis(100));
+
+            signaller.signal(42);
+        });
+
+        assert!(executor::block_on(future) == Ok(42));
+    }
+}

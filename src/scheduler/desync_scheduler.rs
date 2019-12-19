@@ -48,7 +48,7 @@ fn initial_max_threads() -> usize {
 /// The scheduler is used to schedule tasks onto a pool of threads
 ///
 pub struct Scheduler {
-    core: Arc<SchedulerCore>
+    pub (super) core: Arc<SchedulerCore>
 }
 
 impl Scheduler {
