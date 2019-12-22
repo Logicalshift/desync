@@ -2,6 +2,7 @@ use super::job_queue::*;
 use super::queue_state::*;
 use super::core::*;
 use super::active_queue::*;
+use super::wake_queue::*;
 
 use futures::prelude::*;
 use futures::channel::oneshot;
@@ -269,7 +270,13 @@ impl<T> SchedulerFuture<T> {
                 // Queue is running
                 debug_assert!(self.queue.core.lock().expect("Job queue core").state == QueueState::Running);
 
-                let poll_result = job.run(context);
+                // Create a context to poll in (we may need to reschedule in the background)
+                let waker               = Arc::new(DrainWaker::new());
+                let waker_ref           = task::waker_ref(&waker);
+                let mut drain_context   = task::Context::from_waker(&waker_ref);
+
+                // Poll the queue
+                let poll_result = job.run(&mut drain_context);
 
                 match poll_result {
                     task::Poll::Ready(())   => {
@@ -282,11 +289,28 @@ impl<T> SchedulerFuture<T> {
 
                         // If the result was supplied, break out of the loop and reschedule the queue
                         result = self.result.lock().expect("Scheduler future result").result.take();
-                        if !result.is_none() { break; }
+                        if !result.is_none() {
+                            // Wake the queue in the background if needed
+                            self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForWake;
 
-                        // Need to wait until we're polled again to get the result
-                        self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
-                        return task::Poll::Pending;
+                            let queue_waker = WakeQueue(Arc::clone(&self.queue), Arc::clone(&self.scheduler));
+                            let queue_waker = Arc::new(queue_waker);
+                            let queue_waker = task::waker(queue_waker);
+
+                            waker.wake_with(queue_waker);
+
+                            // The future is ready (job will be rescheduled in the background)
+                            return task::Poll::Ready(result.unwrap());
+                        } else {
+                            // Wait for the next poll
+                            self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
+
+                            // Use the context waker
+                            waker.wake_with(context.waker().clone());
+
+                            // Result is pending
+                            return task::Poll::Pending;
+                        }
                     }
                 }
             } else {
