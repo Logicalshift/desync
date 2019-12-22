@@ -43,9 +43,6 @@ pub (super) struct JobQueueCore {
 
     /// The current state of this queue
     pub (super) state: QueueState,
-    
-    /// How many times this queue has been suspended (can be negative to indicate the suspension ended before it began)
-    pub (super) suspension_count: i32
 }
 
 impl fmt::Debug for JobQueue {
@@ -64,8 +61,7 @@ impl JobQueue {
         JobQueue { 
             core: Mutex::new(JobQueueCore {
                 queue:              VecDeque::new(),
-                state:              QueueState::Idle,
-                suspension_count:   0
+                state:              QueueState::Idle
             })
         }
     }
