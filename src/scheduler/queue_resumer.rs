@@ -11,7 +11,7 @@ impl QueueResumer {
     ///
     /// Resumes a suspended queue
     ///
-    pub fn resume(mut self) {
+    pub fn resume(self) {
         // Send to the channel
         self.resume.send(()).ok();
     }
