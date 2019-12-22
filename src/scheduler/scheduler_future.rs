@@ -21,6 +21,88 @@ enum FutureResultState<T> {
 }
 
 ///
+/// The possible states of a waker that will wake up a queue that's being drained as part of polling a future
+///
+enum DrainWakerState {
+    /// The drain waker has never been woken before
+    NotWoken,
+
+    /// This has been woken but the waker is not set
+    Woken,
+
+    /// This has been woken and the waker is set
+    WillWakeWithWaker(task::Waker)
+}
+
+///
+/// Waker that will wake up a queue being drained. We set the waker with a delay so it's possible to switch to
+/// a waker that will wake a future on a background queue if necessary.
+///
+struct DrainWaker {
+    state: Mutex<DrainWakerState>
+}
+
+impl DrainWaker {
+    ///
+    /// Creates a new drain waker
+    ///
+    fn new() -> DrainWaker {
+        DrainWaker {
+            state: Mutex::new(DrainWakerState::NotWoken)
+        }
+    }
+
+    ///
+    /// Sets the waker to be called when this drain waker is woken
+    ///
+    fn wake_with(&self, new_waker: task::Waker) {
+        use self::DrainWakerState::*;
+
+        // Update the state and determine if we need to invoke the waker immediately (if it's been woken before the waker was set)
+        let to_wake = {
+            // Fetch the current state
+            let mut new_state   = self.state.lock().expect("Drain waker state");
+            let mut state       = Woken;
+            mem::swap(&mut *new_state, &mut state);
+
+            // Update the state based on this action
+            match state {
+                Woken                           => { *new_state = Woken; Some(new_waker) },
+                NotWoken                        => { *new_state = WillWakeWithWaker(new_waker); None },
+                WillWakeWithWaker(_old_waker)   => { *new_state = WillWakeWithWaker(new_waker); None }
+            }
+        };
+
+        // Wake up the waker, if we need to call it immediately
+        to_wake.map(|to_wake| to_wake.wake());
+    }
+}
+
+impl task::ArcWake for DrainWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        use self::DrainWakerState::*;
+
+        // If the current state contains a waker, we'll call it once we've unlocked the mutex
+        let to_wake = {
+            // Fetch the current state
+            let mut new_state   = arc_self.state.lock().expect("Drain waker state");
+            let mut state       = Woken;
+            mem::swap(&mut *new_state, &mut state);
+
+            // Update the state based on this action
+            match state {
+                NotWoken                    => { *new_state = Woken; None },
+                Woken                       => { *new_state = Woken; None },
+                WillWakeWithWaker(waker)    => { *new_state = Woken; Some(waker) }
+            }
+        };
+
+        // Wake up the waker
+        to_wake.map(|to_wake| to_wake.wake());
+    }
+}
+
+///
 /// Signalling structure used to return the result of a scheduler future
 ///
 struct SchedulerFutureResult<T> {
@@ -86,7 +168,7 @@ impl<T> FutureResultState<T> {
 impl<T> Drop for SchedulerFutureSignaller<T> {
     fn drop(&mut self) {
         let waker = {
-            let mut future_result = self.0.lock().unwrap();
+            let mut future_result = self.0.lock().expect("Scheduler future result");
 
             // If no result has been generated, then mark the future as canceled
             if future_result.result.is_none() {
@@ -113,7 +195,7 @@ impl<T> SchedulerFutureSignaller<T> {
     ///
     pub (super) fn signal(self, result: T) {
         let waker = {
-            let mut future_result = self.0.lock().unwrap();
+            let mut future_result = self.0.lock().expect("Scheduler futuer result");
 
             // Set the result
             future_result.result = FutureResultState::Some(Ok(result));
@@ -179,13 +261,13 @@ impl<T> SchedulerFuture<T> {
         // While there is no result, run a job from the queue
         loop {
             // See if the result has arrived yet
-            result = self.result.lock().unwrap().result.take();
+            result = self.result.lock().expect("Scheduler future result").result.take();
             if !result.is_none() { break; }
 
             // Run the next job in the queue
             if let Some(mut job) = self.queue.dequeue() {
                 // Queue is running
-                debug_assert!(self.queue.core.lock().unwrap().state == QueueState::Running);
+                debug_assert!(self.queue.core.lock().expect("Job queue core").state == QueueState::Running);
 
                 let poll_result = job.run(context);
 
@@ -199,7 +281,7 @@ impl<T> SchedulerFuture<T> {
                         self.queue.requeue(job);
 
                         // If the result was supplied, break out of the loop and reschedule the queue
-                        result = self.result.lock().unwrap().result.take();
+                        result = self.result.lock().expect("Scheduler future result").result.take();
                         if !result.is_none() { break; }
 
                         // Need to wait until we're polled again to get the result
@@ -211,7 +293,7 @@ impl<T> SchedulerFuture<T> {
                 // Queue is empty and our result hasn't arrived yet?!
                 
                 // Assume the future will resolve eventually: move the queue in to the background
-                self.result.lock().unwrap().waker = Some(context.waker().clone());
+                self.result.lock().expect("Scheduler future result").waker = Some(context.waker().clone());
                 
                 // Reschedule the queue
                 self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
@@ -243,7 +325,7 @@ impl<T> Future for SchedulerFuture<T> {
     fn poll(mut self: Pin<&mut Self>, context: &mut task::Context) -> task::Poll<Self::Output> {
         // Lock the result and determine which action to take
         let next_action = {
-            let mut future_result = self.result.lock().unwrap();
+            let mut future_result = self.result.lock().expect("Scheduler future result");
 
             if let Some(result) = future_result.result.take() {
                 // The result is available: we should return it immediately
