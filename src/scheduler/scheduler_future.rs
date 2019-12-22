@@ -360,8 +360,6 @@ impl<T> Future for SchedulerFuture<T> {
                     let mut core = self.queue.core.lock().expect("JobQueue core lock");
 
                     match core.state {
-                        QueueState::Suspended           => SchedulerAction::WaitForCompletion,
-                        QueueState::Suspending          => SchedulerAction::WaitForCompletion,
                         QueueState::Running             => SchedulerAction::WaitForCompletion,
                         QueueState::WaitingForWake      => SchedulerAction::WaitForCompletion,
                         QueueState::AwokenWhileRunning  => SchedulerAction::WaitForCompletion,

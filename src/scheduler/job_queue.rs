@@ -29,9 +29,6 @@ pub (super) enum JobStatus {
 
     /// Job was run successfully
     Finished,
-
-    /// The job caused the queue to suspend: it will be rescheduled in the background
-    WaitInBackground
 }
 
 ///
@@ -73,7 +70,6 @@ impl JobQueue {
         let mut core = self.core.lock().expect("JobQueue core lock");
 
         match core.state {
-            QueueState::Suspending      => None,
             QueueState::WaitingForWake  => None,
             other                       => {
                 debug_assert!(other == QueueState::Running);
@@ -132,19 +128,14 @@ impl JobQueue {
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running || core.state == QueueState::Suspending);
+                debug_assert!(core.state == QueueState::Running);
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
                     core.state = match core.state {
                         QueueState::Running         => QueueState::Idle,
-                        QueueState::Suspending      => QueueState::Suspended,
                         x                           => x
                     };
-                    done = true;
-                } else if core.state == QueueState::Suspending {
-                    // Stop draining as we're suspending
-                    core.state = QueueState::Suspended;
                     done = true;
                 } else if core.state == QueueState::Pending {
                     // Will restart when we get re-scheduled
@@ -207,25 +198,7 @@ impl JobQueue {
 
             JobStatus::Finished
         } else {
-            // Queue may have suspended (or gone to suspending and back to running)
-            let wait_in_background = {
-                let mut core = queue.core.lock().expect("JobQueue core lock");
-                if core.state == QueueState::Suspending {
-                    // Finish suspension, then wait for job to complete
-                    core.state = QueueState::Suspended;
-                    true
-                } else {
-                    // Queue is still running
-                    debug_assert!(core.state == QueueState::Running);
-                    false
-                }
-            };
-
-            if wait_in_background {
-                JobStatus::WaitInBackground
-            } else {
-                JobStatus::NoJobsWaiting
-            }
+            JobStatus::NoJobsWaiting
         }
     }
 }

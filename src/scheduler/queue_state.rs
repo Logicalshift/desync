@@ -22,11 +22,5 @@ pub (super) enum QueueState {
     AwokenWhileRunning,
 
     /// Queue received a panic and is no longer able to be scheduled
-    Panicked,
-
-    /// Queue is running but should suspend instead of running the next step
-    Suspending,
-
-    /// Queue has been suspended and won't run futher jobs until it is re-awakened
-    Suspended
+    Panicked
 }

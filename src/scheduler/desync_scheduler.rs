@@ -349,16 +349,6 @@ impl Scheduler {
         while result.0.lock().expect("Sync queue result lock").is_none() {
             match JobQueue::run_one_job_now(queue) {
                 JobStatus::Finished | JobStatus::NoJobsWaiting => { },
-
-                JobStatus::WaitInBackground => {
-                    // After we ran the thread, it suspended. It will be rescheduled in the background before it runs, so wait on the result
-                    while result.0.lock().expect("Sync queue result lock").is_none() {
-                        // Park until the result becomes available
-                        let parking = &result.1;
-                        let result  = result.0.lock().unwrap();
-                        let _result = parking.wait(result).unwrap();
-                    }
-                }
             }
         }
 
@@ -445,8 +435,6 @@ impl Scheduler {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
             match core.state {
-                QueueState::Suspended           => RunAction::WaitForBackground,
-                QueueState::Suspending          => RunAction::WaitForBackground,
                 QueueState::Running             => RunAction::WaitForBackground,
                 QueueState::WaitingForWake      => RunAction::WaitForBackground,
                 QueueState::WaitingForPoll      => RunAction::WaitForBackground,
