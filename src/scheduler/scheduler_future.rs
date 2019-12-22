@@ -198,7 +198,11 @@ impl<T> SchedulerFuture<T> {
                         // Requeue the job
                         self.queue.requeue(job);
 
-                        // Need to wait until we're polled again
+                        // If the result was supplied, break out of the loop and reschedule the queue
+                        result = self.result.lock().unwrap().result.take();
+                        if !result.is_none() { break; }
+
+                        // Need to wait until we're polled again to get the result
                         self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
                         return task::Poll::Pending;
                     }
