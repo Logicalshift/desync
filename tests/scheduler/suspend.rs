@@ -8,7 +8,7 @@ use std::sync::*;
 use std::sync::mpsc::*;
 
 #[test]
-fn suspend_queue() {
+fn suspend_queue_with_background_thread() {
     for _x in 0..1000 {
         timeout(|| {
             use futures::executor;
