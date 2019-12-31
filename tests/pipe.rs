@@ -55,7 +55,7 @@ fn pipe_in_mpsc_receiver() {
     // Delay to allow the messages to be processed on the stream
     // TODO: fix so this isn't needed. This happens because there's a race between when 'poll'
     // is called in the pipe and the 'async' call
-    thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(20));
 
     // Should be available on the core
     assert!(obj.sync(|core| core.clone()) == vec![1, 2]);
