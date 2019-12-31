@@ -8,7 +8,7 @@ use std::pin::{Pin};
 use std::sync::{Arc};
 use std::marker::{Unpin};
 use futures::channel::oneshot;
-use futures::future::Future;
+use futures::future::{Future, BoxFuture};
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
@@ -110,10 +110,9 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     ///
-    pub fn future<TFn, TFuture>(&self, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
-    where   TFn:                'static+Send+FnOnce(&mut T) -> TFuture,
-            TFuture:            'static+Send+Future,
-            TFuture::Output:    Send {
+    pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
+            TOutput:    'static+Send {
         let data = DataRef(&*self.data);
 
         scheduler().future(&self.queue, move || {
