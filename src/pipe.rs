@@ -45,7 +45,7 @@
 use super::desync::*;
 
 use futures::*;
-use futures::future::{FutureObj};
+use futures::future::{BoxFuture};
 use futures::stream::{Stream};
 use futures::task;
 use futures::task::{Poll, Context};
@@ -111,7 +111,7 @@ pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process
 where   Core:       'static+Send+Unpin,
         S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
-        ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> () {
+        ProcessFn:  'static+Send+for<'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, ()> {
 
     // Need a mutable version of the stream
     let mut stream = Box::new(stream);
@@ -147,14 +147,17 @@ where   Core:       'static+Send+Unpin,
                         let when_ready = context.waker().clone();
 
                         // Process the value on the stream
-                        desync.desync(move |core| {
-                            {
+                        let _ = desync.future(move |core| {
+                            let future = {
                                 let mut process = process.lock().unwrap();
                                 let process     = &mut *process;
-                                process(core, next);
-                            }
+                                process(core, next)
+                            };
 
-                            when_ready.wake();
+                            Box::pin(async move {
+                                future.await;
+                                when_ready.wake();
+                            })
                         });
 
                         // Wake again when the processing finishes
@@ -428,7 +431,7 @@ struct PipeMonitor {
 /// Provides the 'Notify' interface for a polling function with a particular ID
 /// 
 struct PipeNotify {
-    future: Arc<Desync<Option<FutureObj<'static, ()>>>>
+    future: Arc<Desync<Option<BoxFuture<'static, ()>>>>
 }
 
 impl PipeMonitor {
@@ -447,9 +450,9 @@ impl PipeMonitor {
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
     where PollFn: 'static+Send+FnMut(&mut Context) -> Poll<()> {
         // Turn the polling function into a future (it will complete when monitoring is complete)
-        let poll_fn     = future::poll_fn(poll_fn);
-        let poll_fn     = FutureObj::new(Box::new(poll_fn));
-        let poll_fn     = Arc::new(Desync::new(Some(poll_fn)));
+        let poll_fn                 = future::poll_fn(poll_fn);
+        let poll_fn: BoxFuture<_>   = Box::pin(poll_fn);
+        let poll_fn                 = Arc::new(Desync::new(Some(poll_fn)));
 
         // Create a notifier that will act as the context for this polling operation
         let notifier    = PipeNotify {
