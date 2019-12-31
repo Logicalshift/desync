@@ -3,6 +3,7 @@ extern crate futures;
 
 use desync::*;
 use futures::stream;
+use futures::future;
 use futures::executor;
 use futures::sink::{SinkExt};
 use futures::stream::{StreamExt};
@@ -22,7 +23,7 @@ fn pipe_in_simple_stream() {
     let obj     = Arc::new(Desync::new(vec![]));
 
     // Pipe the stream into the object
-    pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| core.push(Ok(item)));
+    pipe_in(Arc::clone(&obj), stream, |core: &mut Vec<Result<i32, ()>>, item| { core.push(Ok(item)); Box::pin(future::ready(())) });
 
     // Delay to allow the messages to be processed on the stream
     thread::sleep(Duration::from_millis(10));
@@ -40,7 +41,7 @@ fn pipe_in_mpsc_receiver() {
     let obj = Arc::new(Desync::new(vec![]));
 
     // Add anything received to the vector via a pipe
-    pipe_in(Arc::clone(&obj), receiver, |core, item| core.push(item));
+    pipe_in(Arc::clone(&obj), receiver, |core, item| { core.push(item); Box::pin(future::ready(())) });
 
     // Initially empty
     assert!(obj.sync(|core| core.clone()) == vec![]);

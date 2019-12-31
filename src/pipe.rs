@@ -23,6 +23,7 @@
 //! # use std::collections::HashSet;
 //! # use std::sync::*;
 //! # 
+//! use futures::future;
 //! use futures::channel::mpsc;
 //! use futures::executor;
 //! use futures::prelude::*;
@@ -32,7 +33,7 @@
 //!     let desync_hashset          = Arc::new(Desync::new(HashSet::new()));
 //!     let (mut sender, receiver)  = mpsc::channel(5);
 //! 
-//!     pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { hashset.insert(value); });
+//!     pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { hashset.insert(value); Box::pin(future::ready(())) });
 //! 
 //!     sender.send("Test".to_string()).await.unwrap();
 //!     sender.send("Another value".to_string()).await.unwrap();
