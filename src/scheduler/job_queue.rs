@@ -71,8 +71,9 @@ impl JobQueue {
 
         match core.state {
             QueueState::WaitingForWake  => None,
+            QueueState::WaitingForPoll  => None,
             other                       => {
-                debug_assert!(other == QueueState::Running);
+                debug_assert!(other.is_running());
                 core.queue.pop_front()
             }
         }
@@ -93,13 +94,13 @@ impl JobQueue {
     pub (super) fn drain(&self, context: &mut Context) {
         let _active = ActiveQueue { queue: self };
 
-        debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+        debug_assert!(self.core.lock().unwrap().state.is_running());
         let mut done = false;
 
         while !done {
             // Run jobs until the queue is drained or blocks
             while let Some(mut job) = self.dequeue() {
-                debug_assert!(self.core.lock().unwrap().state == QueueState::Running);
+                debug_assert!(self.core.lock().unwrap().state.is_running());
 
                 let poll_result = job.run(context);
 
@@ -128,7 +129,7 @@ impl JobQueue {
             // Try to move back to the 'not running' state
             {
                 let mut core = self.core.lock().expect("JobQueue core lock");
-                debug_assert!(core.state == QueueState::Running);
+                debug_assert!(core.state.is_running());
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
@@ -151,7 +152,7 @@ impl JobQueue {
     pub (super) fn run_one_job_now(queue: &Arc<JobQueue>) -> JobStatus {
         if let Some(mut job) = queue.dequeue() {
             // Queue is running
-            debug_assert!(queue.core.lock().unwrap().state == QueueState::Running);
+            debug_assert!(queue.core.lock().unwrap().state.is_running());
 
             let waker       = Arc::new(WakeThread(Arc::clone(queue), thread::current()));
             let waker       = task::waker_ref(&waker);

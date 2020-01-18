@@ -253,7 +253,7 @@ impl<T> SchedulerFuture<T> {
     /// We moved the queue into the running state and need to drain it until we've got a result
     ///
     fn drain_queue(&mut self, context: &mut task::Context) -> task::Poll<Result<T, oneshot::Canceled>> {
-        debug_assert!(self.queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+        debug_assert!(self.queue.core.lock().expect("JobQueue core lock").state.is_running());
 
         // Set the queue as active
         let _active     = ActiveQueue { queue: &*self.queue };
@@ -268,7 +268,7 @@ impl<T> SchedulerFuture<T> {
             // Run the next job in the queue
             if let Some(mut job) = self.queue.dequeue() {
                 // Queue is running
-                debug_assert!(self.queue.core.lock().expect("Job queue core").state == QueueState::Running);
+                debug_assert!(self.queue.core.lock().expect("Job queue core").state.is_running());
 
                 // Create a context to poll in (we may need to reschedule in the background)
                 let waker               = Arc::new(DrainWaker::new());

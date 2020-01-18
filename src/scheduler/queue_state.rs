@@ -24,3 +24,15 @@ pub (super) enum QueueState {
     /// Queue received a panic and is no longer able to be scheduled
     Panicked
 }
+
+impl QueueState {
+    ///
+    /// Indicates if this queue is in the running state
+    ///
+    pub (crate) fn is_running(&self) -> bool {
+        match self {
+            QueueState::Running | QueueState::AwokenWhileRunning    => true,
+            _other                                                  => false
+        }
+    }
+}

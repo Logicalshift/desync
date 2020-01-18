@@ -301,7 +301,7 @@ impl Scheduler {
     /// Runs a sync job immediately on the current thread. Queue must be in Running mode for this to be valid
     ///
     fn sync_immediate<Result, TFn: FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
-        debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+        debug_assert!(queue.core.lock().expect("JobQueue core lock").state.is_running());
 
         // Set the queue as active
         let _active = ActiveQueue { queue: &*queue };
@@ -322,7 +322,7 @@ impl Scheduler {
     /// Runs a sync job immediately by running all the jobs in the current queue 
     ///
     fn sync_drain<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
-        debug_assert!(queue.core.lock().expect("JobQueue core lock").state == QueueState::Running);
+        debug_assert!(queue.core.lock().expect("JobQueue core lock").state.is_running());
 
         // Set the queue as active
         let _active = ActiveQueue { queue: &*queue };
