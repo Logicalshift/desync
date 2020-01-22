@@ -7,6 +7,7 @@ use super::scheduler::*;
 use std::pin::{Pin};
 use std::sync::{Arc};
 use std::marker::{Unpin};
+use futures::{FutureExt};
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
@@ -135,13 +136,11 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     ///
     pub fn after<'a, TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(&mut T, Fut::Output) -> Res {
-        // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-        // Also, we'll have exclusive access to this object when the callback occurs
-        let data = DataRef(&*self.data);
-
-        scheduler().after(&self.queue, after, move |future_result| {
-            let data = data.0 as *mut T;
-            job(unsafe { &mut *data }, future_result)
+        self.future(move |data| {
+            async move {
+                let future_result = after.await;
+                job(data, future_result)
+            }.boxed()
         })
     }
 }
