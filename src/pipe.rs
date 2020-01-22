@@ -33,7 +33,7 @@
 //!     let desync_hashset          = Arc::new(Desync::new(HashSet::new()));
 //!     let (mut sender, receiver)  = mpsc::channel(5);
 //! 
-//!     pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { hashset.insert(value); Box::pin(future::ready(())) });
+//!     pipe_in(Arc::clone(&desync_hashset), receiver, |hashset, value| { hashset.insert(value); future::ready(()).boxed() });
 //! 
 //!     sender.send("Test".to_string()).await.unwrap();
 //!     sender.send("Another value".to_string()).await.unwrap();
@@ -155,10 +155,10 @@ where   Core:       'static+Send+Unpin,
                                 process(core, next)
                             };
 
-                            Box::pin(async move {
+                            async move {
                                 future.await;
                                 when_ready.wake();
-                            })
+                            }.boxed()
                         });
 
                         // Wake again when the processing finishes
@@ -451,8 +451,7 @@ impl PipeMonitor {
     pub fn monitor<PollFn>(&self, poll_fn: PollFn)
     where PollFn: 'static+Send+FnMut(&mut Context) -> Poll<()> {
         // Turn the polling function into a future (it will complete when monitoring is complete)
-        let poll_fn                 = future::poll_fn(poll_fn);
-        let poll_fn: BoxFuture<_>   = Box::pin(poll_fn);
+        let poll_fn                 = future::poll_fn(poll_fn).boxed();
         let poll_fn                 = Arc::new(Desync::new(Some(poll_fn)));
 
         // Create a notifier that will act as the context for this polling operation

@@ -79,6 +79,7 @@
 //! # use desync::Desync;
 //! # use std::thread;
 //! # use std::time::*;
+//! # use futures::{FutureExt};
 //! # use futures::executor;
 //! # use futures::future;
 //! # let number = Desync::new(0);
@@ -87,7 +88,7 @@
 //! #     thread::sleep(Duration::from_millis(100));
 //! #     *val = 42;
 //! # });
-//! let future_number = number.future(|val| Box::pin(future::ready(*val)));
+//! let future_number = number.future(|val| future::ready(*val).boxed());
 //! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
 //! ```

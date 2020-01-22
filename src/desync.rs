@@ -111,9 +111,9 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     /// 
-    /// The future returned is a `BoxFuture`, which you can create using `Box::pin()` on a future. This is solely to
-    /// work around a limitation in Rust's type system (it's not possible to introduce the lifetime from for<'a> into 
-    /// the return type of a function)
+    /// The future returned is a `BoxFuture`, which you can create using `.boxed()` or `Box::pin()` on a future. This is 
+    /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
+    /// from for<'a> into the return type of a function)
     ///
     pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
     where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
