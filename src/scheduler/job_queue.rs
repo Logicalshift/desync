@@ -73,7 +73,7 @@ impl JobQueue {
             QueueState::WaitingForWake  => None,
             QueueState::WaitingForPoll  => None,
             other                       => {
-                debug_assert!(other.is_running());
+                debug_assert!(other.is_running(), "State is {:?}", core.state);
                 core.queue.pop_front()
             }
         }
