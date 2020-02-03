@@ -164,3 +164,49 @@ fn wait_for_future() {
         })
     }, 500);
 }
+
+#[test]
+fn future_and_sync() {
+    // This test seems to produce different behaviour if it's run by itself (this sleep tends to force it to run after the other tests and thus fail)
+    // So far the failure seems reliable when this test is running exclusively
+    sleep(Duration::from_millis(1000));
+
+    use std::thread;
+    use futures::prelude::*;
+    use futures::channel::oneshot;
+
+    // The idea here is we perform an action with a future() and read the result back with a sync() (which is a way you can mix-and-match
+    // programming models with desync)
+    // 
+    // The 'core' runs a request as a future, waiting for the channel result. We store the result in sync_request, and then retrieve
+    // it again by calling sync - as Desync always runs things sequentially, it guarantees the ordering (something that's much harder
+    // to achieve with a mutex)
+    let (send, recv)    = oneshot::channel::<i32>();
+    let core            = Desync::new(0);
+    let sync_request    = Desync::new(None);
+
+    // Send a request to the 'core' via the sync reqeust and store the result
+    let _ = sync_request.future(move |data| {
+        async move {
+            let result = core.future(move |_core| {
+                async move {
+                    Some(recv.await.unwrap())
+                }.boxed()
+            }).await;
+
+            *data = result.unwrap();
+        }.boxed()
+    });
+
+    // Signal the future after a delay
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(50));
+        send.send(42).ok();
+    });
+
+    // Retrieve the result once the future completes
+    let result = sync_request.sync(|req| req.take());
+
+    // Should retrieve the value generated in the future
+    assert!(result == Some(42));
+}
