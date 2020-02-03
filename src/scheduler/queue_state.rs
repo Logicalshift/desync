@@ -15,6 +15,9 @@ pub (super) enum QueueState {
     /// A job on the queue has indicated that it's waiting to be re-awakened (by the scheduler)
     WaitingForWake,
 
+    /// The queue is running synchronously on a thread and is waiting to be unparked
+    WaitingForUnpark,
+
     /// We've returned from a polling operation and are waiting to be resumed
     WaitingForPoll,
 
@@ -31,8 +34,10 @@ impl QueueState {
     ///
     pub (crate) fn is_running(&self) -> bool {
         match self {
-            QueueState::Running | QueueState::AwokenWhileRunning    => true,
-            _other                                                  => false
+            QueueState::Running             | 
+            QueueState::AwokenWhileRunning  | 
+            QueueState::WaitingForUnpark    => true,
+            _other                          => false
         }
     }
 }

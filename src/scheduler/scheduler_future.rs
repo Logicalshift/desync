@@ -362,6 +362,7 @@ impl<T> Future for SchedulerFuture<T> {
                     match core.state {
                         QueueState::Running             => SchedulerAction::WaitForCompletion,
                         QueueState::WaitingForWake      => SchedulerAction::WaitForCompletion,
+                        QueueState::WaitingForUnpark    => SchedulerAction::WaitForCompletion,
                         QueueState::AwokenWhileRunning  => SchedulerAction::WaitForCompletion,
                         QueueState::Panicked            => SchedulerAction::Panic,
                         QueueState::WaitingForPoll      => { core.state = QueueState::Running; SchedulerAction::DrainQueue },

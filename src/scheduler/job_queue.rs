@@ -171,11 +171,11 @@ impl JobQueue {
 
                             core.state = match core.state {
                                 QueueState::AwokenWhileRunning  => QueueState::Running,
-                                QueueState::Running             => QueueState::WaitingForWake,
+                                QueueState::Running             => QueueState::WaitingForUnpark,
                                 other                           => panic!("Queue was in unexpected state {:?}", other)
                             };
 
-                            core.state == QueueState::WaitingForWake
+                            core.state == QueueState::WaitingForUnpark
                         };
 
                         // Park until the queue state returns changes
@@ -184,9 +184,10 @@ impl JobQueue {
                             loop {
                                 let current_state = { queue.core.lock().unwrap().state };
                                 match current_state {
-                                    QueueState::Idle            => break,
-                                    QueueState::WaitingForWake  => (),
-                                    other                       => panic!("Queue was in unexpected state {:?}", other)
+                                    QueueState::Running             => break,
+                                    QueueState::AwokenWhileRunning  => break,
+                                    QueueState::WaitingForUnpark    => (),
+                                    other                           => panic!("Queue was in unexpected state {:?}", other)
                                 }
 
                                 // Park until we're awoken from the other thread (once awoken, we re-check the state)
@@ -197,6 +198,8 @@ impl JobQueue {
                 }
             }
 
+            // Queue should still be running once we resume
+            debug_assert!(queue.core.lock().unwrap().state.is_running());
             JobStatus::Finished
         } else {
             JobStatus::NoJobsWaiting

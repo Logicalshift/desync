@@ -437,6 +437,7 @@ impl Scheduler {
             match core.state {
                 QueueState::Running             => RunAction::WaitForBackground,
                 QueueState::WaitingForWake      => RunAction::WaitForBackground,
+                QueueState::WaitingForUnpark    => RunAction::WaitForBackground,
                 QueueState::WaitingForPoll      => RunAction::WaitForBackground,
                 QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
                 QueueState::Panicked            => RunAction::Panic,
