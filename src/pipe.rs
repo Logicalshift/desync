@@ -486,7 +486,10 @@ impl PipeNotify {
             // Poll for the next result
             match future.as_mut().map(|future| future.poll_unpin(context)) {
                 // Stop if the future completes (keep the polling function so it's deallocated)
-                None | Some(Poll::Ready(())) => { }
+                None | Some(Poll::Ready(())) => { 
+                    // Drop the future down the reference chute to avoid a potential deadlock
+                    REFERENCE_CHUTE.desync(move |_| mem::drop(future));
+                }
 
                 // Wait for the next event if the future does not complete
                 Some(Poll::Pending) => { *maybe_future = future }
