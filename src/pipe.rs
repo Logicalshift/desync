@@ -195,6 +195,7 @@ where   Core:       'static+Send+Unpin,
 /// # use std::sync::*;
 /// # 
 /// use futures::prelude::*;
+/// use futures::future;
 /// use futures::channel::mpsc;
 /// use futures::executor;
 /// # use ::desync::*;
@@ -204,7 +205,7 @@ where   Core:       'static+Send+Unpin,
 ///     let (mut sender, receiver)  = mpsc::channel::<String>(5);
 /// 
 ///     let mut value_inserted      = pipe(Arc::clone(&desync_hashset), receiver, 
-///         |hashset, value| { (value.clone(), hashset.insert(value)) });
+///         |hashset, value| { future::ready((value.clone(), hashset.insert(value))).boxed() });
 /// 
 ///     sender.send("Test".to_string()).await.unwrap();
 ///     sender.send("Another value".to_string()).await.unwrap();
@@ -221,7 +222,7 @@ where   Core:       'static+Send+Unpin,
         S:          'static+Send+Unpin+Stream,
         S::Item:    Send,
         Output:     'static+Send,
-        ProcessFn:  'static+Send+FnMut(&mut Core, S::Item) -> Output {
+        ProcessFn:  'static+Send+for <'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, Output> {
 
     // Fetch the input stream and prepare the process function for async calling
     let mut input_stream    = Box::new(stream);
@@ -294,22 +295,29 @@ where   Core:       'static+Send+Unpin,
 
                 // Send the next item to be processed
                 let when_finished = context.waker().clone();
-                desync.desync(move |core| {
+                let _ = desync.future(move |core| {
                     // Process the next item
-                    let mut process     = process.lock().unwrap();
-                    let process         = &mut *process;
-                    let next_item       = process(core, next_item);
-
-                    // Send to the pipe stream
-                    let notify = {
-                        let mut stream_core = stream_core.lock().unwrap();
-
-                        stream_core.pending.push_back(next_item);
-                        stream_core.notify.take()
+                    let future = {
+                        let mut process     = process.lock().unwrap();
+                        let process         = &mut *process;
+                        process(core, next_item)
                     };
-                    notify.map(|notify| notify.wake());
 
-                    when_finished.wake();
+                    async move {
+                        // Wait for the next item
+                        let next_item = future.await;
+
+                        // Send to the pipe stream
+                        let notify = {
+                            let mut stream_core = stream_core.lock().unwrap();
+
+                            stream_core.pending.push_back(next_item);
+                            stream_core.notify.take()
+                        };
+                        notify.map(|notify| notify.wake());
+
+                        when_finished.wake();
+                    }.boxed()
                 });
 
                 // Poll again when the task is complete

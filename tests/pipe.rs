@@ -8,6 +8,7 @@ use futures::executor;
 use futures::sink::{SinkExt};
 use futures::stream::{StreamExt};
 use futures::channel::mpsc;
+use futures::prelude::*;
 
 use std::sync::*;
 use std::thread;
@@ -71,7 +72,7 @@ fn pipe_through() {
     let obj             = Arc::new(Desync::new(1));
 
     // Create a pipe that adds values from the stream to the value in the object
-    let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item| item + *core);
+    let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item| future::ready(item + *core).boxed());
 
     // Start things running
     executor::block_on(async {
@@ -99,7 +100,7 @@ fn pipe_through_stream_closes() {
         let obj = Arc::new(Desync::new(1));
 
         // Create a pipe that adds values from the stream to the value in the object
-        let mut pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: i32| item + *core);
+        let mut pipe_out = pipe(Arc::clone(&obj), receiver, |core, item: i32| future::ready(item + *core).boxed());
 
         // Start things running
         executor::block_on(async {
@@ -125,7 +126,7 @@ fn pipe_through_produces_backpressure() {
     let obj = Arc::new(Desync::new(1));
 
     // Create a pipe that adds values from the stream to the value in the object
-    let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item: i32| item + *core);
+    let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item: i32| future::ready(item + *core).boxed());
 
     // Set the backpressure depth to 3
     pipe_out.set_backpressure_depth(3);
