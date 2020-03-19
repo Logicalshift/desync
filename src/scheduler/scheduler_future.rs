@@ -289,8 +289,8 @@ impl<T> SchedulerFuture<T> {
 
                         // If the result was supplied, break out of the loop and reschedule the queue
                         result = self.result.lock().expect("Scheduler future result").result.take();
-                        if !result.is_none() {
-                            // Wake the queue in the background if needed
+                        if result.is_some() {
+                            // Wake the queue in the background if needed (the result has arrived)
                             self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForWake;
 
                             let queue_waker = WakeQueue(Arc::clone(&self.queue), Arc::clone(&self.scheduler));
