@@ -6,7 +6,10 @@ use desync::Desync;
 mod scheduler;
 use self::scheduler::timeout::*;
 
+use futures::prelude::*;
 use futures::future;
+
+use std::sync::*;
 use std::time::*;
 use std::thread::*;
 
@@ -209,4 +212,58 @@ fn future_and_sync() {
 
     // Should retrieve the value generated in the future
     assert!(result == Some(42));
+}
+
+#[test]
+fn double_future_and_sync() {
+    use std::thread;
+
+    // This test will queue two futures here, each of which will need to return to another desync
+    // If two futures are scheduled and triggered in a row when draining a queue that both signal
+    let core        = Arc::new(Desync::new(()));
+
+    let initiator_1 = Desync::new(None);
+    let initiator_2 = Desync::new(None);
+    let initiator_3 = Desync::new(None);
+
+    let core_1      = Arc::clone(&core);
+    let _           = initiator_1.future(move |val| {
+        async move {
+            // Wait for a task on the core
+            *val = core_1.future(move |_| {
+                async move { thread::sleep(Duration::from_millis(400)); Some(1) }.boxed()
+            }).await.unwrap();
+        }.boxed()
+    });
+
+    let core_2      = Arc::clone(&core);
+    let _           = initiator_2.future(move |val| {
+        async move {
+            // Wait for the original initiator to start its future
+            thread::sleep(Duration::from_millis(100));
+
+            // Wait for a task on the core
+            *val = core_2.future(move |_| {
+                async move { thread::sleep(Duration::from_millis(200)); Some(2) }.boxed()
+            }).await.unwrap();
+        }.boxed()
+    });
+
+    let core_3      = Arc::clone(&core);
+    let _           = initiator_3.future(move |val| {
+        async move {
+            // Wait for the original initiator to start its future
+            thread::sleep(Duration::from_millis(200));
+
+            // Wait for a task on the core
+            *val = core_3.future(move |_| {
+                async move { thread::sleep(Duration::from_millis(200)); Some(3) }.boxed()
+            }).await.unwrap();
+        }.boxed()
+    });
+
+    // Wait for the result from the futures synchronously
+    assert!(initiator_3.sync(|val| { *val }) == Some(3));
+    assert!(initiator_2.sync(|val| { *val }) == Some(2));
+    assert!(initiator_1.sync(|val| { *val }) == Some(1));
 }
