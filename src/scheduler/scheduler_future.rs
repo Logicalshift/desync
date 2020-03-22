@@ -126,6 +126,9 @@ pub (super) struct SchedulerFutureSignaller<T>(Arc<Mutex<SchedulerFutureResult<T
 /// (stealing its execution time rather than blocking)
 ///
 pub struct SchedulerFuture<T> {
+    /// The unique ID of this future
+    id: FutureId,
+
     /// The queue which will eventually evaluate the result of this future
     queue: Arc<JobQueue>,
 
@@ -241,6 +244,7 @@ impl<T> SchedulerFuture<T> {
 
         // Insert into a future
         let future = SchedulerFuture {
+            id:         FutureId::new(),
             queue:      Arc::clone(queue),
             scheduler:  core,
             result:     Arc::clone(&result)
@@ -303,7 +307,7 @@ impl<T> SchedulerFuture<T> {
                             return task::Poll::Ready(result.unwrap());
                         } else {
                             // Wait for the next poll
-                            self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll;
+                            self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll(self.id);
 
                             // Use the context waker
                             waker.wake_with(context.waker().clone());
@@ -360,14 +364,23 @@ impl<T> Future for SchedulerFuture<T> {
                     let mut core = self.queue.core.lock().expect("JobQueue core lock");
 
                     match core.state {
-                        QueueState::Running             => SchedulerAction::WaitForCompletion,
-                        QueueState::WaitingForWake      => SchedulerAction::WaitForCompletion,
-                        QueueState::WaitingForUnpark    => SchedulerAction::WaitForCompletion,
-                        QueueState::AwokenWhileRunning  => SchedulerAction::WaitForCompletion,
-                        QueueState::Panicked            => SchedulerAction::Panic,
-                        QueueState::WaitingForPoll      => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
-                        QueueState::Pending             => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
-                        QueueState::Idle                => { core.state = QueueState::Running; SchedulerAction::DrainQueue }
+                        QueueState::Running                     => SchedulerAction::WaitForCompletion,
+                        QueueState::WaitingForWake              => SchedulerAction::WaitForCompletion,
+                        QueueState::WaitingForUnpark            => SchedulerAction::WaitForCompletion,
+                        QueueState::AwokenWhileRunning          => SchedulerAction::WaitForCompletion,
+                        QueueState::Panicked                    => SchedulerAction::Panic,
+                        QueueState::Pending                     => { core.state = QueueState::Running; SchedulerAction::DrainQueue },
+                        QueueState::Idle                        => { core.state = QueueState::Running; SchedulerAction::DrainQueue }
+
+                        QueueState::WaitingForPoll(owner_id)    => { 
+                            if owner_id == self.id {
+                                // Continue polling on this future
+                                core.state = QueueState::Running; SchedulerAction::DrainQueue
+                            } else {
+                                // Wait for the owning future to complete
+                                SchedulerAction::WaitForCompletion
+                            }
+                        },
                     }
                 };
 

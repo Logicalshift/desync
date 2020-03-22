@@ -1,3 +1,26 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
+lazy_static! {
+    static ref NEXT_FUTURE_ID: AtomicU64 = AtomicU64::new(0);
+}
+
+///
+/// ID of a future used in a state
+///
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub (super) struct FutureId(pub u64);
+
+impl FutureId {
+    ///
+    /// Creates a new unique future ID
+    ///
+    pub fn new() -> FutureId {
+        let next_id = NEXT_FUTURE_ID.fetch_add(1, Ordering::Relaxed);
+
+        FutureId(next_id)
+    }
+}
+
 ///
 /// Represents the state of a job queue
 ///
@@ -39,7 +62,10 @@ pub (super) enum QueueState {
     /// poll() method on a future and has returned pending. This queue should be resumed when the
     /// future is next awoken by calling 'poll' (it's effectively 'running' in the context of the
     /// call too poll)
-    WaitingForPoll,
+    /// 
+    /// Only the future that moved the queue into this state can re-awaken the queue (ie, any other
+    /// futures must wait for this one to complete first)
+    WaitingForPoll(FutureId),
 
     /// A wake-up call was made while the queue was in the running state
     /// 
@@ -60,7 +86,7 @@ impl QueueState {
         match self {
             QueueState::Running             | 
             QueueState::AwokenWhileRunning  | 
-            QueueState::WaitingForPoll      |
+            QueueState::WaitingForPoll(_)   |
             QueueState::WaitingForUnpark    => true,
             _other                          => false
         }

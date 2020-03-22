@@ -70,9 +70,11 @@ impl JobQueue {
         let mut core = self.core.lock().expect("JobQueue core lock");
 
         match core.state {
-            QueueState::WaitingForWake  => None,
-            QueueState::WaitingForPoll  => None,
-            other                       => {
+            QueueState::WaitingForWake      => None,
+            QueueState::WaitingForPoll(_)   => None,
+            QueueState::WaitingForUnpark    => None,
+
+            other                           => {
                 debug_assert!(other.is_running(), "State is {:?}", core.state);
                 core.queue.pop_front()
             }
