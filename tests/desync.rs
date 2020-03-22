@@ -218,6 +218,8 @@ fn future_and_sync() {
 fn double_future_and_sync() {
     use std::thread;
 
+    // TODO: signal with channels instead of using thread::sleep
+
     // This test will queue two futures here, each of which will need to return to another desync
     // If two futures are scheduled and triggered in a row when draining a queue that both signal
     let core        = Arc::new(Desync::new(()));
