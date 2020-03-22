@@ -54,6 +54,9 @@ pub (super) enum QueueState {
     /// occur on some other thread, usually the completion of a future. Queues in this state must
     /// only be resumed by the appropriate unparking method (the queue is effectively 'running'
     /// on the thread where it is parked)
+    /// 
+    /// As the queue is only allowed to run on one thread at any one time, only one thread can be
+    /// waiting to be unparked.
     WaitingForUnpark,
 
     /// We've returned from a polling operation and are waiting to be resumed
@@ -64,7 +67,8 @@ pub (super) enum QueueState {
     /// call too poll)
     /// 
     /// Only the future that moved the queue into this state can re-awaken the queue (ie, any other
-    /// futures must wait for this one to complete first)
+    /// futures must wait for this one to complete first). As the queue can only run on a single
+    /// thread at any one time, only a single future is allowed to put the queue into this state.
     WaitingForPoll(FutureId),
 
     /// A wake-up call was made while the queue was in the running state
