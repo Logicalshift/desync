@@ -4,8 +4,12 @@ use super::timeout::*;
 
 use std::thread;
 use std::time::*;
+use std::sync::*;
 use std::sync::mpsc::*;
 
+use futures::prelude::*;
+use futures::task;
+use futures::task::{ArcWake, Poll};
 use futures::channel::oneshot;
 
 #[test]
@@ -163,4 +167,87 @@ fn future_waits_for_us() {
             assert!(rx.recv().unwrap() == 3);
         });
     }, 500);
+}
+
+///
+/// Used for polling futures to see if they've notified us yet
+///
+struct TestWaker {
+    pub awake: Mutex<bool>
+}
+
+impl ArcWake for TestWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        (*arc_self.awake.lock().unwrap()) = true;
+    }
+}
+
+#[test]
+fn poll_two_futures_on_one_queue() {
+    // 0 threads so we force the future to act in 'drain' mode
+    let scheduler   = Scheduler::new();
+
+    // Even with 0 threads, futures should still run (by draining on the current thread as for sync actions)
+    scheduler.set_max_threads(0);
+    scheduler.despawn_threads_if_overloaded();
+
+    // If a single queue has a future on 
+    let queue           = queue();
+    let (done1, recv1)  = oneshot::channel::<()>();
+    let (done2, recv2)  = oneshot::channel::<()>();
+
+    let wake1           = Arc::new(TestWaker { awake: Mutex::new(false) });
+    let wake2           = Arc::new(TestWaker { awake: Mutex::new(false) });
+
+    // Wait for done1 then done2 to signal
+    let mut future_1    = scheduler.future(&queue, move || {
+        async move { recv1.await.ok(); }
+    });
+
+    let mut future_2    = scheduler.future(&queue, move || {
+        async move { recv2.await.ok(); }
+    });
+
+    // Poll future 1 then future 2 (as there are no threads to run, we'll use the 'drain on current thread' style, which will return pending as recv is pending)
+    let waker_ref           = task::waker_ref(&wake1);
+    let mut ctxt            = task::Context::from_waker(&waker_ref);
+
+    assert!(future_1.poll_unpin(&mut ctxt) == Poll::Pending);
+
+    // Only future_1 should be 'pollable' at this point
+    let waker_ref           = task::waker_ref(&wake2);
+    let mut ctxt            = task::Context::from_waker(&waker_ref);
+
+    assert!(future_2.poll_unpin(&mut ctxt) == Poll::Pending);
+
+    // Finish both futures
+    done1.send(()).unwrap();
+
+    let waker_ref           = task::waker_ref(&wake2);
+    let mut ctxt            = task::Context::from_waker(&waker_ref);
+
+    assert!(future_2.poll_unpin(&mut ctxt) == Poll::Pending);
+
+    done2.send(()).unwrap();
+
+    // future_1 should be signalled for polling, future_2 should not
+    assert!((*wake2.awake.lock().unwrap()) == false);
+    assert!((*wake1.awake.lock().unwrap()) == true);
+
+    // Retrieve the result for future_1
+    let waker_ref           = task::waker_ref(&wake2);
+    let mut ctxt            = task::Context::from_waker(&waker_ref);
+
+    assert!(future_1.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));
+    
+    // Both future 1 and future 2 should have signalled now
+    
+    // TODO: this is a bug with 0 threads
+    // assert!((*wake2.awake.lock().unwrap()) == true);
+
+    let waker_ref           = task::waker_ref(&wake2);
+    let mut ctxt            = task::Context::from_waker(&waker_ref);
+
+    // Should be able to retrieve the result of future_2
+    assert!(future_2.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));
 }

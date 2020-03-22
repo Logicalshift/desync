@@ -373,7 +373,8 @@ impl<T> Future for SchedulerFuture<T> {
                         QueueState::Idle                        => { core.state = QueueState::Running; SchedulerAction::DrainQueue }
 
                         QueueState::WaitingForPoll(owner_id)    => { 
-                            if owner_id == self.id {
+                            if owner_id == self.id || true {
+                                // TODO: the '|| true' here should reproduce an old bug I'm writing tests for, remove it :-)
                                 // Continue polling on this future
                                 core.state = QueueState::Running; SchedulerAction::DrainQueue
                             } else {
