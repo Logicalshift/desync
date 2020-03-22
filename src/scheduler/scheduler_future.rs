@@ -196,7 +196,7 @@ impl<T> SchedulerFutureSignaller<T> {
     ///
     pub (super) fn signal(self, result: T) {
         let waker = {
-            let mut future_result = self.0.lock().expect("Scheduler futuer result");
+            let mut future_result = self.0.lock().expect("Scheduler future result");
 
             // Set the result
             future_result.result = FutureResultState::Some(Ok(result));
