@@ -214,7 +214,7 @@ fn poll_two_futures_on_one_queue() {
 
     assert!(future_1.poll_unpin(&mut ctxt) == Poll::Pending);
 
-    // Only future_1 should be 'pollable' at this point
+    // Only future_1 should be 'pollable' at this point (ie, is in the WaitForPoll state from the previous call)
     let waker_ref           = task::waker_ref(&wake2);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
@@ -242,12 +242,25 @@ fn poll_two_futures_on_one_queue() {
     
     // Both future 1 and future 2 should have signalled now
     
-    // TODO: this is a bug with 0 threads
+    // TODO: this is a possible bug with 0 threads - the thread won't reschedule after future_1 completes, so wake2 will not yet be set
+    //          (This is quite a complicated problem: if the drain continued processing jobs until it became pending instead of scheduling
+    //          in the background, this would work but the return from poll could be delayed indefinitely)
     // assert!((*wake2.awake.lock().unwrap()) == true);
+   
+    // Give the scheduler a chance to run the other future (it will be queued in the background, so this is required for the notification to occur)
+    scheduler.set_max_threads(1);
+    for _ in 0..100 {
+        if *wake2.awake.lock().unwrap() { break; }
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!((*wake2.awake.lock().unwrap()) == true);
 
     let waker_ref           = task::waker_ref(&wake2);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
     // Should be able to retrieve the result of future_2
     assert!(future_2.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));
+
+    // TODO: not actually sure if this is bad behaviour or not but if future_2 is polled first, future_1 won't be available until future_2
+    //      completes. This is another 0 thread only issue as future_1 will be able to send its notification when the thread pool is available.
 }
