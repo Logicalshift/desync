@@ -22,8 +22,9 @@ impl ArcWake for WakeQueue {
 
             // Queue can be woken if it's in the WaitingForWake state
             match queue_core.state {
+                QueueState::WaitingForUnpark    => { panic!("WakeQueue cannot unpark a parked queue") },
+
                 QueueState::WaitingForWake      => queue_core.state = QueueState::Idle,
-                QueueState::WaitingForUnpark    => queue_core.state = QueueState::Running,
                 QueueState::Running             => queue_core.state = QueueState::AwokenWhileRunning,
                 other_state                     => queue_core.state = other_state
             }
