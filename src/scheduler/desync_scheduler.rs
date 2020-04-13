@@ -453,6 +453,49 @@ impl Scheduler {
             RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
         }
     }
+
+    ///
+    /// Schedules a synchronous event to the queue. Returns false if the queue is not panicked, or true if it is,
+    /// but otherwise behaves like sync()
+    ///
+    pub (crate) fn sync_no_panic<TFn: Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) -> bool {
+        enum RunAction {
+            /// The queue is empty: call the function directly and don't bother with storing a result
+            Immediate,
+
+            /// The queue is not empty but not running: drain on this thread so we get to the sync op
+            DrainOnThisThread,
+
+            /// The queue is running in the background
+            WaitForBackground,
+
+            /// The queue is panicked
+            Panic
+        }
+
+        // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+        let run_action = {
+            let mut core = queue.core.lock().expect("JobQueue core lock");
+
+            match core.state {
+                QueueState::Running             => RunAction::WaitForBackground,
+                QueueState::WaitingForWake      => RunAction::WaitForBackground,
+                QueueState::WaitingForUnpark    => RunAction::WaitForBackground,
+                QueueState::WaitingForPoll(_)   => RunAction::WaitForBackground,
+                QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
+                QueueState::Panicked            => RunAction::Panic,
+                QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
+                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+            }
+        };
+
+        match run_action {
+            RunAction::Immediate            => { self.sync_immediate(queue, job); false },
+            RunAction::DrainOnThisThread    => { self.sync_drain(queue, job); false },
+            RunAction::WaitForBackground    => { self.sync_background(queue, job); false },
+            RunAction::Panic                => true
+        }
+    }
 }
 
 impl fmt::Debug for Scheduler {

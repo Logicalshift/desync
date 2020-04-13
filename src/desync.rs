@@ -147,9 +147,17 @@ impl<T: 'static+Send+Unpin> Desync<T> {
 
 impl<T: Send+Unpin> Drop for Desync<T> {
     fn drop(&mut self) {
+        use std::thread;
+
         // Ensure that everything on the queue has committed by queueing a last synchronous event
         // (Not synchronising the queue would make this unsafe as we would hold on to a pointer to
         // the internal data structure)
-        sync(&self.queue, || {});
+        if thread::panicking() {
+            // If the thread is already panicking when we're dropped, do not panic again
+            scheduler().sync_no_panic(&self.queue, || {});
+        } else {
+            // Thread is not panicking
+            sync(&self.queue, || {});
+        }
     }
 }
