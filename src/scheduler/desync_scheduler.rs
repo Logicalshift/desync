@@ -14,6 +14,7 @@ use super::queue_resumer::*;
 use std::fmt;
 use std::sync::*;
 use std::collections::vec_deque::*;
+use std::result::{Result};
 
 use futures::channel::oneshot;
 use futures::future::{Future};
@@ -450,6 +451,47 @@ impl Scheduler {
             RunAction::Immediate            => self.sync_immediate(queue, job),
             RunAction::DrainOnThisThread    => self.sync_drain(queue, job),
             RunAction::WaitForBackground    => self.sync_background(queue, job),
+            RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
+        }
+    }
+
+    ///
+    /// If the queue is immediately available (in the idle state), runs the specified action, otherwise
+    /// indicates an error.
+    ///
+    /// If the queue is waiting to be scheduled rather than idle, this will also return an error.
+    ///
+    pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, ()> {
+        enum RunAction {
+            /// The queue is empty: call the function directly and don't bother with storing a result
+            Immediate,
+
+            /// The queue is busy and this call should return an error
+            Busy,
+
+            /// The queue is panicked
+            Panic
+        }
+
+        // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+        let run_action = {
+            let mut core = queue.core.lock().expect("JobQueue core lock");
+
+            match core.state {
+                QueueState::Running             => RunAction::Busy,
+                QueueState::WaitingForWake      => RunAction::Busy,
+                QueueState::WaitingForUnpark    => RunAction::Busy,
+                QueueState::WaitingForPoll(_)   => RunAction::Busy,
+                QueueState::AwokenWhileRunning  => RunAction::Busy,
+                QueueState::Panicked            => RunAction::Panic,
+                QueueState::Pending             => RunAction::Busy,
+                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+            }
+        };
+
+        match run_action {
+            RunAction::Immediate            => Ok(self.sync_immediate(queue, job)),
+            RunAction::Busy                 => Err(()),
             RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
         }
     }
