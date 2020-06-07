@@ -11,6 +11,8 @@ use futures::{FutureExt};
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
+use std::mem;
+
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
 ///
@@ -19,7 +21,8 @@ pub struct Desync<T: Send+Unpin> {
     queue:  Arc<JobQueue>,
 
     /// Data for this object. Boxed so the pointer remains the same through the lifetime of the object.
-    data:   Pin<Box<T>>
+    /// Will be 'None' only briefly when the data has been taken to be dropped
+    data:   Option<Pin<Box<T>>>
 }
 
 // Rust actually derives this anyway at the moment
@@ -49,7 +52,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
 
         Desync {
             queue:  queue,
-            data:   Pin::new(Box::new(data))
+            data:   Some(Pin::new(Box::new(data)))
         }
     }
 
@@ -79,7 +82,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
-        let data = DataRef(&*self.data);
+        let data = DataRef(&*self.data.as_ref().unwrap());
 
         desync(&self.queue, move || {
             let data = data.0 as *mut T;
@@ -96,7 +99,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-            let data = DataRef(&*self.data);
+            let data = DataRef(&*self.data.as_ref().unwrap());
 
             sync(&self.queue, move || {
                 let data = data.0 as *mut T;
@@ -118,7 +121,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
     where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
             TOutput:    'static+Send {
-        let data = DataRef(&*self.data);
+        let data = DataRef(&*self.data.as_ref().unwrap());
 
         scheduler().future(&self.queue, move || {
             let data        = data.0 as *mut T;
@@ -149,15 +152,22 @@ impl<T: Send+Unpin> Drop for Desync<T> {
     fn drop(&mut self) {
         use std::thread;
 
+        // Take the data we're about to drop from the object
+        let data = self.data.take();
+
         // Ensure that everything on the queue has committed by queueing a last synchronous event
         // (Not synchronising the queue would make this unsafe as we would hold on to a pointer to
         // the internal data structure)
         if thread::panicking() {
             // If the thread is already panicking when we're dropped, do not panic again
-            scheduler().sync_no_panic(&self.queue, || {});
+            scheduler().sync_no_panic(&self.queue, move || {
+                mem::drop(data);
+            });
         } else {
             // Thread is not panicking
-            sync(&self.queue, || {});
+            sync(&self.queue, move || {
+                mem::drop(data);
+            });
         }
     }
 }
