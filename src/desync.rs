@@ -82,7 +82,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
-        let data = DataRef(&*self.data.as_ref().unwrap());
+        let data = DataRef(&**self.data.as_ref().unwrap());
 
         desync(&self.queue, move || {
             let data = data.0 as *mut T;
@@ -99,7 +99,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-            let data = DataRef(&*self.data.as_ref().unwrap());
+            let data = DataRef(&**self.data.as_ref().unwrap());
 
             sync(&self.queue, move || {
                 let data = data.0 as *mut T;
@@ -121,7 +121,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
     where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
             TOutput:    'static+Send {
-        let data = DataRef(&*self.data.as_ref().unwrap());
+        let data = DataRef(&**self.data.as_ref().unwrap());
 
         scheduler().future(&self.queue, move || {
             let data        = data.0 as *mut T;
