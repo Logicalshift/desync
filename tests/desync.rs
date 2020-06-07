@@ -269,3 +269,75 @@ fn double_future_and_sync() {
     assert!(initiator_2.sync(|val| { *val }) == Some(2));
     assert!(initiator_1.sync(|val| { *val }) == Some(1));
 }
+
+#[test]
+fn try_sync_succeeds_on_idle_queue() {
+    timeout(|| {
+        let core        = Desync::new(0);
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result = core.try_sync(|val| {
+            *val = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!(core.sync(|val| *val) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_succeeds_on_idle_queue_after_async_job() {
+    timeout(|| {
+        use std::thread;
+        let core        = Desync::new(0);
+
+        // Schedule something asynchronously and wait for it to complete
+        core.desync(|_val| thread::sleep(Duration::from_millis(50)));
+        core.sync(|_val| { });
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result = core.try_sync(|val| {
+            *val= 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!(core.sync(|val| *val) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_fails_on_busy_queue() {
+    timeout(|| {
+        use std::sync::mpsc::*;
+        
+        let core        = Desync::new(0);
+
+        // Schedule on the queue and block it
+        let (tx, rx)    = channel();
+
+        core.desync(move |_val| { rx.recv().ok(); });
+
+        // Queue is busy, so try_sync should fail
+        let sync_result = core.try_sync(|val| {
+            *val = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result.is_err());
+
+        // Unblock the queue
+        tx.send(1).ok();
+
+        // Double-check that the value was not updated
+        assert!((core.sync(|val| *val)) == 0);
+    }, 500);
+}

@@ -12,6 +12,7 @@ use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
 use std::mem;
+use std::result::{Result};
 
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
@@ -102,6 +103,24 @@ impl<T: 'static+Send+Unpin> Desync<T> {
             let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
             sync(&self.queue, move || {
+                let data = data.0 as *mut T;
+                job(unsafe { &mut *data })
+            })
+        };
+
+        result
+    }
+
+    ///
+    /// Performs an operation synchronously on this item, 
+    ///
+    pub fn try_sync<TFn, FnResult>(&self, job: TFn) -> Result<FnResult, TrySyncError>
+    where TFn: Send+FnOnce(&mut T) -> FnResult, FnResult: Send {
+        let result = {
+            // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
+            let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+
+            try_sync(&self.queue, move || {
                 let data = data.0 as *mut T;
                 job(unsafe { &mut *data })
             })

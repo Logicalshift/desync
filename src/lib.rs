@@ -124,5 +124,6 @@ pub mod scheduler;
 pub mod desync;
 pub mod pipe;
 
+pub use self::scheduler::{TrySyncError};
 pub use self::desync::*;
 pub use self::pipe::*;

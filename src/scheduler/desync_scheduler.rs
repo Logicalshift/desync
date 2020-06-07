@@ -601,3 +601,10 @@ where   TFn:                'static+Send+FnOnce() -> TFuture,
 pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
     scheduler().sync(queue, job)
 }
+
+///
+/// Performs an action synchronously on the specified queue 
+///
+pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, TrySyncError> {
+    scheduler().try_sync(queue, job)
+}
