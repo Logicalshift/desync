@@ -10,6 +10,7 @@ use super::queue_state::*;
 use super::active_queue::*;
 use super::scheduler_future::*;
 use super::queue_resumer::*;
+use super::try_sync_error::*;
 
 use std::fmt;
 use std::sync::*;
@@ -461,7 +462,7 @@ impl Scheduler {
     ///
     /// If the queue is waiting to be scheduled rather than idle, this will also return an error.
     ///
-    pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, ()> {
+    pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, TrySyncError> {
         enum RunAction {
             /// The queue is empty: call the function directly and don't bother with storing a result
             Immediate,
@@ -491,7 +492,7 @@ impl Scheduler {
 
         match run_action {
             RunAction::Immediate            => Ok(self.sync_immediate(queue, job)),
-            RunAction::Busy                 => Err(()),
+            RunAction::Busy                 => Err(TrySyncError::Busy),
             RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
         }
     }
