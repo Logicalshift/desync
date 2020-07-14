@@ -334,7 +334,7 @@ where   Core:       'static+Send+Unpin,
         async move {
             if let Some(stream_core) = stream_core {
                 // Defer processing if the stream core is full
-                {
+                let is_closed = {
                     // Fetch the core
                     let mut stream_core = stream_core.lock().unwrap();
 
@@ -348,14 +348,20 @@ where   Core:       'static+Send+Unpin,
                     }
 
                     // If the core is closed, finish up
-                    if stream_core.closed {
-                        return false;
-                    }
+                    stream_core.closed
+                };
+
+                // Wake up the stream and stop reading from the stream if the core is closed
+                if is_closed {
+                    let notify = { stream_core.lock().unwrap().notify.take() };
+                    notify.map(|notify| notify.wake());
+
+                    return false;
                 }
 
                 loop {
                     // Disable the notifier if there was one left over
-                    stream_core.lock().unwrap().stream_closed = None;
+                    stream_core.lock().unwrap().notify_stream_closed = None;
 
                     // Poll the stream
                     let next = input_stream.lock().unwrap().poll_next_unpin(&mut context);
@@ -363,7 +369,7 @@ where   Core:       'static+Send+Unpin,
                     match next {
                         // Wait for notification when the stream goes pending
                         Poll::Pending       => {
-                            stream_core.lock().unwrap().stream_closed = Some(context.waker().clone());
+                            stream_core.lock().unwrap().notify_stream_closed = Some(context.waker().clone());
                             return true
                         },
 
@@ -417,7 +423,7 @@ struct PipeStreamCore<Item>  {
     notify: Option<task::Waker>,
 
     /// The task to notify when the stream changes
-    stream_closed: Option<task::Waker>,
+    notify_stream_closed: Option<task::Waker>,
 
     /// The task to notify when we reduce the amount of pending data
     backpressure_release_notify: Option<task::Waker>
@@ -441,7 +447,7 @@ impl<Item> PipeStream<Item> {
                 pending:                        VecDeque::new(),
                 closed:                         false,
                 notify:                         None,
-                stream_closed:                  None,
+                notify_stream_closed:           None,
                 backpressure_release_notify:    None
             }))
         }
@@ -465,7 +471,7 @@ impl<Item> Drop for PipeStream<Item> {
         core.pending = VecDeque::new();
 
         // Wake the stream to finish closing it
-        core.stream_closed.take().map(|stream_closed| stream_closed.wake());
+        core.notify_stream_closed.take().map(|notify_stream_closed| notify_stream_closed.wake());
     }
 }
 
