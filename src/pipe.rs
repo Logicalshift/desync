@@ -364,6 +364,8 @@ where   Core:       'static+Send+Unpin,
         let mut context = context;
 
         async move {
+            let waker = context.waker().clone();
+
             if let Some(stream_core) = stream_core {
                 // Defer processing if the stream core is full
                 {
