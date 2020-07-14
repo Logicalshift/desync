@@ -143,9 +143,9 @@ where   Core:   'static+Send+Unpin,
 struct PipeContextFuture<Core, PollFn>
 where   Core: Send+Unpin {
     /// The desync target that will be woken when the stream notifies that it needs to be polled
-    ///   We keep a weak reference so that if the stream/future is all that's left referencing the
-    ///   desync, it's thrown away
-    target: Weak<Desync<Core>>,
+    ///   The target is kept around so long as the output stream exists, so a reference to the desync
+    ///   doesn't need to be kept around.
+    target: Arc<Desync<Core>>,
 
     /// The function that should be called to poll this stream. Returns false if we should no longer keep polling the stream
     poll_fn: Arc<Mutex<Option<PollFn>>>
@@ -159,7 +159,7 @@ where   Core:   'static+Send+Unpin,
     ///
     fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContextFuture<Core, PollFn>> {
         let context = PipeContextFuture {
-            target:     Arc::downgrade(target),
+            target:     Arc::clone(target),
             poll_fn:    Arc::new(Mutex::new(Some(poll_fn)))
         };
 
@@ -170,38 +170,33 @@ where   Core:   'static+Send+Unpin,
     /// Triggers the poll function in the context of the target desync
     ///
     fn poll(arc_self: Arc<Self>) {
-        // If the desync is stil live...
-        if let Some(target) = arc_self.target.upgrade() {
-            // Grab the poll function
-            let maybe_poll_fn = Arc::clone(&arc_self.poll_fn);
+        // Grab the poll function
+        let maybe_poll_fn   = Arc::clone(&arc_self.poll_fn);
+        let target          = Arc::clone(&arc_self.target);
 
-            // Schedule a polling operation on the desync
-            let _ = target.future(move |core| {
-                async move {
-                    // Create a futures context from the context reference
-                    let waker   = task::waker_ref(&arc_self);
-                    let context = Context::from_waker(&waker);
+        // Schedule a polling operation on the desync
+        let _ = target.future(move |core| {
+            async move {
+                // Create a futures context from the context reference
+                let waker   = task::waker_ref(&arc_self);
+                let context = Context::from_waker(&waker);
 
-                    // Pass in to the poll function
-                    let future_poll = {
-                        let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
-                        let future_poll     = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
-                        future_poll
-                    };
+                // Pass in to the poll function
+                let future_poll = {
+                    let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
+                    let future_poll     = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
+                    future_poll
+                };
 
-                    if let Some(future_poll) = future_poll {
-                        let keep_polling    = future_poll.await;
-                        if !keep_polling {
-                            // Deallocate the function when it's time to stop polling altogether
-                            (*arc_self.poll_fn.lock().unwrap()) = None;
-                        }
+                if let Some(future_poll) = future_poll {
+                    let keep_polling    = future_poll.await;
+                    if !keep_polling {
+                        // Deallocate the function when it's time to stop polling altogether
+                        (*arc_self.poll_fn.lock().unwrap()) = None;
                     }
-                }.boxed()
-            });
-        } else {
-            // Stream has woken up but the desync is no longer listening
-            (*arc_self.poll_fn.lock().unwrap()) = None;
-        }
+                }
+            }.boxed()
+        });
     }
 }
 
