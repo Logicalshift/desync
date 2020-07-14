@@ -98,6 +98,58 @@ impl<Core: 'static+Send+Unpin> Drop for LazyDrop<Core> {
 }
 
 ///
+/// Futures notifier used to wake up a pipe when a stream or future notifies
+///
+struct PipeContext<Core, PollFn>
+where   Core: Send+Unpin {
+    /// The desync target that will be woken when the stream notifies that it needs to be polled
+    ///   We keep a weak reference so that if the stream/future is all that's left referencing the
+    ///   desync, it's thrown away
+    target: Weak<Desync<Core>>,
+
+    /// The function that should be called to poll this stream
+    poll_fn: Arc<Mutex<PollFn>>
+}
+
+impl<Core, PollFn> PipeContext<Core, PollFn>
+where   Core:   'static+Send+Unpin,
+        PollFn: 'static+Send+FnMut(&mut Core, Context) -> () {
+    ///
+    /// Triggers the poll function in the context of the target desync
+    ///
+    fn poll(arc_self: Arc<Self>) {
+        // If the desync is stil live...
+        if let Some(target) = arc_self.target.upgrade() {
+            // Grab the poll function
+            let poll_fn = Arc::clone(&arc_self.poll_fn);
+
+            // Schedule a polling operation on the desync
+            target.desync(move |core| {
+                // Create a futures context from the context reference
+                let waker   = task::waker_ref(&arc_self);
+                let context = Context::from_waker(&waker);
+
+                // Pass in to the poll function
+                let mut poll_fn = poll_fn.lock().unwrap();
+                (&mut *poll_fn)(core, context);
+            })
+        }
+    }
+}
+
+impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
+where   Core:   'static+Send+Unpin,
+        PollFn: 'static+Send+FnMut(&mut Core, Context) -> () {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        Self::poll(Arc::clone(arc_self));
+    }
+
+    fn wake(self: Arc<Self>) {
+        Self::poll(self);
+    }
+}
+
+///
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received.
 /// 
