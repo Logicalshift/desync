@@ -369,7 +369,18 @@ where   Core:       'static+Send+Unpin,
                         },
 
                         // Stop polling when the stream stops generating new events
-                        Poll::Ready(None)   => return false,
+                        Poll::Ready(None)   => {
+                            // Mark the stream as closed, and wake it up
+                            let notify = {
+                                let mut stream_core = stream_core.lock().unwrap();
+
+                                stream_core.closed = true;
+                                stream_core.notify.take()
+                            };
+                            notify.map(|notify| notify.wake());
+
+                            return false;
+                        },
 
                         // Invoke the callback when there's some data on the stream
                         Poll::Ready(Some(next)) => {
@@ -464,6 +475,9 @@ impl<Item> Drop for PipeStream<Item> {
 
         // Flush the pending queue
         core.pending = VecDeque::new();
+
+        // Mark the core as closed to stop it from reading from the stream
+        core.closed = true;
 
         // Wake the stream to finish closing it
         core.notify_stream_closed.take().map(|notify_stream_closed| notify_stream_closed.wake());
