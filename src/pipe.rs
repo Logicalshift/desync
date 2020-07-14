@@ -191,8 +191,8 @@ where   Core:   'static+Send+Unpin,
     ///
     /// Creates a new pipe context, ready to poll
     ///
-    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContext<Core, PollFn>> {
-        let context = PipeContext {
+    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContextFuture<Core, PollFn>> {
+        let context = PipeContextFuture {
             target:     Arc::downgrade(target),
             poll_fn:    Arc::new(Mutex::new(Some(poll_fn)))
         };
@@ -350,8 +350,8 @@ where   Core:       'static+Send+Unpin,
         ProcessFn:  'static+Send+for <'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, Output> {
 
     // Prepare the streams
-    let mut input_stream    = stream;
-    let mut process         = process;
+    let input_stream    = Arc::new(Mutex::new(stream));
+    let process         = Arc::new(Mutex::new(process));
     let output_stream       = PipeStream::<Output>::new();
 
     // Get the core from the output stream
@@ -360,8 +360,10 @@ where   Core:       'static+Send+Unpin,
 
     // Create the read context
     let context             = PipeContextFuture::new(&desync, move |core, context| {
-        let stream_core = stream_core.upgrade();
-        let mut context = context;
+        let stream_core     = stream_core.upgrade();
+        let mut context     = context;
+        let input_stream    = Arc::clone(&input_stream);
+        let process         = Arc::clone(&process);
 
         async move {
             if let Some(stream_core) = stream_core {
@@ -387,7 +389,7 @@ where   Core:       'static+Send+Unpin,
 
                 loop {
                     // Poll the stream
-                    let next: Poll<Option<S::Item>> = Poll::Pending; /* stream.poll_next_unpin(&mut context); */
+                    let next = input_stream.lock().unwrap().poll_next_unpin(&mut context);
 
                     match next {
                         // Wait for notification when the stream goes pending
@@ -399,13 +401,14 @@ where   Core:       'static+Send+Unpin,
                         // Invoke the callback when there's some data on the stream
                         Poll::Ready(Some(next)) => {
                             // Pipe the next item through
-                            //let next_item = process(core, next).await;
+                            let next_item = (&mut *process.lock().unwrap())(core, next);
+                            let next_item = next_item.await;
 
                             // Send to the pipe stream, and wake it up
                             let notify = {
                                 let mut stream_core = stream_core.lock().unwrap();
 
-                                //stream_core.pending.push_back(next_item);
+                                stream_core.pending.push_back(next_item);
                                 stream_core.notify.take()
                             };
                             notify.map(|notify| notify.wake());
@@ -418,6 +421,9 @@ where   Core:       'static+Send+Unpin,
             }
         }.boxed()
     });
+
+    // Poll the context to start the stream running
+    PipeContextFuture::poll(context);
 
     output_stream
 
