@@ -388,12 +388,18 @@ where   Core:       'static+Send+Unpin,
                 }
 
                 loop {
+                    // Disable the notifier if there was one left over
+                    stream_core.lock().unwrap().notify = None;
+
                     // Poll the stream
                     let next = input_stream.lock().unwrap().poll_next_unpin(&mut context);
 
                     match next {
                         // Wait for notification when the stream goes pending
-                        Poll::Pending       => return true,
+                        Poll::Pending       => {
+                            stream_core.lock().unwrap().notify = Some(context.waker().clone());
+                            return true
+                        },
 
                         // Stop polling when the stream stops generating new events
                         Poll::Ready(None)   => return false,
