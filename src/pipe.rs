@@ -172,6 +172,86 @@ where   Core:   'static+Send+Unpin,
 }
 
 ///
+/// Futures notifier used to wake up a pipe when a stream or future notifies
+///
+struct PipeContextFuture<Core, PollFn>
+where   Core: Send+Unpin {
+    /// The desync target that will be woken when the stream notifies that it needs to be polled
+    ///   We keep a weak reference so that if the stream/future is all that's left referencing the
+    ///   desync, it's thrown away
+    target: Weak<Desync<Core>>,
+
+    /// The function that should be called to poll this stream. Returns false if we should no longer keep polling the stream
+    poll_fn: Arc<Mutex<Option<PollFn>>>
+}
+
+impl<Core, PollFn> PipeContextFuture<Core, PollFn>
+where   Core:   'static+Send+Unpin,
+        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context) -> BoxFuture<'a, bool> {
+    ///
+    /// Creates a new pipe context, ready to poll
+    ///
+    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContext<Core, PollFn>> {
+        let context = PipeContext {
+            target:     Arc::downgrade(target),
+            poll_fn:    Arc::new(Mutex::new(Some(poll_fn)))
+        };
+
+        Arc::new(context)
+    }
+
+    ///
+    /// Triggers the poll function in the context of the target desync
+    ///
+    fn poll(arc_self: Arc<Self>) {
+        // If the desync is stil live...
+        if let Some(target) = arc_self.target.upgrade() {
+            // Grab the poll function
+            let maybe_poll_fn = Arc::clone(&arc_self.poll_fn);
+
+            // Schedule a polling operation on the desync
+            let _ = target.future(move |core| {
+                async move {
+                    // Create a futures context from the context reference
+                    let waker   = task::waker_ref(&arc_self);
+                    let context = Context::from_waker(&waker);
+
+                    // Pass in to the poll function
+                    let future_poll = {
+                        let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
+                        let future_poll     = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
+                        future_poll
+                    };
+
+                    if let Some(future_poll) = future_poll {
+                        let keep_polling    = future_poll.await;
+                        if !keep_polling {
+                            // Deallocate the function when it's time to stop polling altogether
+                            (*arc_self.poll_fn.lock().unwrap()) = None;
+                        }
+                    }
+                }.boxed()
+            });
+        } else {
+            // Stream has woken up but the desync is no longer listening
+            (*arc_self.poll_fn.lock().unwrap()) = None;
+        }
+    }
+}
+
+impl<Core, PollFn> task::ArcWake for PipeContextFuture<Core, PollFn>
+where   Core:   'static+Send+Unpin,
+        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context) -> BoxFuture<'a, bool> {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        Self::poll(Arc::clone(arc_self));
+    }
+
+    fn wake(self: Arc<Self>) {
+        Self::poll(self);
+    }
+}
+
+///
 /// Pipes a stream into a desync object. Whenever an item becomes available on the stream, the
 /// processing function is called asynchronously with the item that was received.
 /// 
@@ -279,61 +359,67 @@ where   Core:       'static+Send+Unpin,
     let stream_core     = Arc::downgrade(&stream_core);
 
     // Create the read context
-    let context             = PipeContext::new(&desync, move |core, context| {
-        let mut context = context;
+    let context             = PipeContextFuture::new(&desync, move |core, context| {
+        async move {
+            /*
+            let mut context = context;
 
-        if let Some(stream_core) = stream_core.upgrade() {
-            // Defer processing if the stream core is full
-            {
-                // Fetch the core
-                let mut stream_core = stream_core.lock().unwrap();
+            if let Some(stream_core) = stream_core.upgrade() {
+                // Defer processing if the stream core is full
+                {
+                    // Fetch the core
+                    let mut stream_core = stream_core.lock().unwrap();
 
-                // If the pending queue is full, then stop processing events
-                if stream_core.pending.len() >= stream_core.max_pipe_depth {
-                    // Wake when the stream accepts some input
-                    stream_core.backpressure_release_notify = Some(context.waker().clone());
+                    // If the pending queue is full, then stop processing events
+                    if stream_core.pending.len() >= stream_core.max_pipe_depth {
+                        // Wake when the stream accepts some input
+                        stream_core.backpressure_release_notify = Some(context.waker().clone());
 
-                    // Go back to sleep without reading from the stream
-                    return true;
-                }
+                        // Go back to sleep without reading from the stream
+                        return true;
+                    }
 
-                // If the core is closed, finish up
-                if stream_core.closed {
-                    return false;
-                }
-            }
-
-            loop {
-                // Poll the stream
-                let next = stream.poll_next_unpin(&mut context);
-
-                match next {
-                    // Wait for notification when the stream goes pending
-                    Poll::Pending       => return true,
-
-                    // Stop polling when the stream stops generating new events
-                    Poll::Ready(None)   => return false,
-
-                    // Invoke the callback when there's some data on the stream
-                    Poll::Ready(Some(next)) => {
-                        // Pipe the next item through
-                        let next_item = process(core, next);
-
-                        // Send to the pipe stream, and wake it up
-                        let notify = {
-                            let mut stream_core = stream_core.lock().unwrap();
-
-                            stream_core.pending.push_back(next_item);
-                            stream_core.notify.take()
-                        };
-                        notify.map(|notify| notify.wake());
+                    // If the core is closed, finish up
+                    if stream_core.closed {
+                        return false;
                     }
                 }
+
+                loop {
+                    // Poll the stream
+                    let next = stream.poll_next_unpin(&mut context);
+
+                    match next {
+                        // Wait for notification when the stream goes pending
+                        Poll::Pending       => return true,
+
+                        // Stop polling when the stream stops generating new events
+                        Poll::Ready(None)   => return false,
+
+                        // Invoke the callback when there's some data on the stream
+                        Poll::Ready(Some(next)) => {
+                            // Pipe the next item through
+                            let next_item = process(core, next).await;
+
+                            // Send to the pipe stream, and wake it up
+                            let notify = {
+                                let mut stream_core = stream_core.lock().unwrap();
+
+                                stream_core.pending.push_back(next_item);
+                                stream_core.notify.take()
+                            };
+                            notify.map(|notify| notify.wake());
+                        }
+                    }
+                }
+            } else {
+                // The stream core has been released
+                return false;
             }
-        } else {
-            // The stream core has been released
-            return false;
-        }
+            */
+
+            true
+        }.boxed()
     });
 
     output_stream
