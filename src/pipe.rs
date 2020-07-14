@@ -266,6 +266,76 @@ where   Core:       'static+Send+Unpin,
         Output:     'static+Send,
         ProcessFn:  'static+Send+for <'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, Output> {
 
+    // Prepare the streams
+    let mut input_stream    = stream;
+    let mut process         = process;
+    let output_stream       = PipeStream::<Output>::new();
+
+    // Get the core from the output stream
+    let stream_core     = Arc::clone(&output_stream.core);
+    let stream_core     = Arc::downgrade(&stream_core);
+
+    // Create the read context
+    let context             = PipeContext::new(&desync, move |core, context| {
+        let mut context = context;
+
+        if let Some(stream_core) = stream_core.upgrade() {
+            // Defer processing if the stream core is full
+            {
+                // Fetch the core
+                let mut stream_core = stream_core.lock().unwrap();
+
+                // If the pending queue is full, then stop processing events
+                if stream_core.pending.len() >= stream_core.max_pipe_depth {
+                    // Wake when the stream accepts some input
+                    stream_core.backpressure_release_notify = Some(context.waker().clone());
+
+                    // Go back to sleep without reading from the stream
+                    return true;
+                }
+
+                // If the core is closed, finish up
+                if stream_core.closed {
+                    return false;
+                }
+            }
+
+            loop {
+                // Poll the stream
+                let next = stream.poll_next_unpin(&mut context);
+
+                match next {
+                    // Wait for notification when the stream goes pending
+                    Poll::Pending       => return true,
+
+                    // Stop polling when the stream stops generating new events
+                    Poll::Ready(None)   => return false,
+
+                    // Invoke the callback when there's some data on the stream
+                    Poll::Ready(Some(next)) => {
+                        // Pipe the next item through
+                        let next_item = process(core, next);
+
+                        // Send to the pipe stream, and wake it up
+                        let notify = {
+                            let mut stream_core = stream_core.lock().unwrap();
+
+                            stream_core.pending.push_back(next_item);
+                            stream_core.notify.take()
+                        };
+                        notify.map(|notify| notify.wake());
+                    }
+                }
+            }
+        } else {
+            // The stream core has been released
+            return false;
+        }
+    });
+
+    output_stream
+
+    /*
     // Fetch the input stream and prepare the process function for async calling
     let mut input_stream    = Box::new(stream);
     let process             = Arc::new(Mutex::new(process));
@@ -374,6 +444,7 @@ where   Core:       'static+Send+Unpin,
 
     // The pipe stream is the result
     output_stream
+    */
 }
 
 ///
