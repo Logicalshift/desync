@@ -352,7 +352,7 @@ where   Core:       'static+Send+Unpin,
     // Prepare the streams
     let input_stream    = Arc::new(Mutex::new(stream));
     let process         = Arc::new(Mutex::new(process));
-    let output_stream       = PipeStream::<Output>::new();
+    let output_stream   = PipeStream::<Output>::new();
 
     // Get the core from the output stream
     let stream_core     = Arc::clone(&output_stream.core);
@@ -426,117 +426,6 @@ where   Core:       'static+Send+Unpin,
     PipeContextFuture::poll(context);
 
     output_stream
-
-    /*
-    // Fetch the input stream and prepare the process function for async calling
-    let mut input_stream    = Box::new(stream);
-    let process             = Arc::new(Mutex::new(process));
-
-    // Create the output stream
-    let output_stream   = PipeStream::new();
-    let stream_core     = Arc::clone(&output_stream.core);
-    let stream_core     = Arc::downgrade(&stream_core);
-
-    // Monitor the input stream and pass data to the output stream
-    PIPE_MONITOR.monitor(move |context| {
-        loop {
-            let stream_core = stream_core.upgrade();
-
-            if let Some(stream_core) = stream_core {
-                // Defer processing if the stream core is full
-                {
-                    // Fetch the core
-                    let mut stream_core = stream_core.lock().unwrap();
-
-                    // If the pending queue is full, then stop processing events
-                    if stream_core.pending.len() >= stream_core.max_pipe_depth {
-                        // Wake when the stream accepts some input
-                        stream_core.backpressure_release_notify = Some(context.waker().clone());
-
-                        // Go back to sleep without reading from the stream
-                        return Poll::Pending;
-                    }
-
-                    // If the core is closed, finish up
-                    if stream_core.closed {
-                        return Poll::Ready(());
-                    }
-                }
-
-                // Read the current status of the stream
-                let process         = Arc::clone(&process);
-                let next            = (*input_stream).poll_next_unpin(context);
-                let next_item;
-
-                // Work out what the next item to pass to the process function should be
-                match next {
-                    // Just wait if the stream is not ready
-                    Poll::Pending => { return Poll::Pending; },
-
-                    // Stop processing when the input stream is finished
-                    Poll::Ready(None) => { 
-                        let when_closed = context.waker().clone();
-
-                        desync.desync(move |_core| {
-                            // Mark the target stream as closed
-                            let notify = {
-                                let mut stream_core = stream_core.lock().unwrap();
-                                stream_core.closed = true;
-                                stream_core.notify.take()
-                            };
-                            notify.map(|notify| notify.wake());
-
-                            when_closed.wake();
-                        });
-
-                        // Pipe has finished. We return not ready here and finish up once the closed event fires
-                        return Poll::Pending;
-                    }
-
-                    // Stream returned a value
-                    Poll::Ready(Some(next)) => next_item = next
-                }
-
-                // Send the next item to be processed
-                let when_finished = context.waker().clone();
-                let _ = desync.future(move |core| {
-                    // Process the next item
-                    let future = {
-                        let mut process     = process.lock().unwrap();
-                        let process         = &mut *process;
-                        process(core, next_item)
-                    };
-
-                    async move {
-                        // Wait for the next item
-                        let next_item = future.await;
-
-                        // Send to the pipe stream
-                        let notify = {
-                            let mut stream_core = stream_core.lock().unwrap();
-
-                            stream_core.pending.push_back(next_item);
-                            stream_core.notify.take()
-                        };
-                        notify.map(|notify| notify.wake());
-
-                        when_finished.wake();
-                    }.boxed()
-                });
-
-                // Poll again when the task is complete
-                return Poll::Pending;
-
-            } else {
-                // We stop processing once nothing is reading from the target stream
-                return Poll::Ready(());
-            }
-        }
-    });
-
-    // The pipe stream is the result
-    output_stream
-    */
 }
 
 ///
