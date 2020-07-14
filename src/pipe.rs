@@ -187,7 +187,7 @@ where   Core: Send+Unpin {
 
 impl<Core, PollFn> PipeContextFuture<Core, PollFn>
 where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context) -> BoxFuture<'a, bool> {
+        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
     ///
     /// Creates a new pipe context, ready to poll
     ///
@@ -241,7 +241,7 @@ where   Core:   'static+Send+Unpin,
 
 impl<Core, PollFn> task::ArcWake for PipeContextFuture<Core, PollFn>
 where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context) -> BoxFuture<'a, bool> {
+        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
     fn wake_by_ref(arc_self: &Arc<Self>) {
         Self::poll(Arc::clone(arc_self));
     }
@@ -364,8 +364,6 @@ where   Core:       'static+Send+Unpin,
         let mut context = context;
 
         async move {
-            let waker = context.waker().clone();
-
             if let Some(stream_core) = stream_core {
                 // Defer processing if the stream core is full
                 {
@@ -375,7 +373,7 @@ where   Core:       'static+Send+Unpin,
                     // If the pending queue is full, then stop processing events
                     if stream_core.pending.len() >= stream_core.max_pipe_depth {
                         // Wake when the stream accepts some input
-                        //stream_core.backpressure_release_notify = Some(context.waker().clone());
+                        stream_core.backpressure_release_notify = Some(context.waker().clone());
 
                         // Go back to sleep without reading from the stream
                         return true;
