@@ -360,11 +360,11 @@ where   Core:       'static+Send+Unpin,
 
     // Create the read context
     let context             = PipeContextFuture::new(&desync, move |core, context| {
-        async move {
-            /*
-            let mut context = context;
+        let stream_core = stream_core.upgrade();
+        let mut context = context;
 
-            if let Some(stream_core) = stream_core.upgrade() {
+        async move {
+            if let Some(stream_core) = stream_core {
                 // Defer processing if the stream core is full
                 {
                     // Fetch the core
@@ -373,7 +373,7 @@ where   Core:       'static+Send+Unpin,
                     // If the pending queue is full, then stop processing events
                     if stream_core.pending.len() >= stream_core.max_pipe_depth {
                         // Wake when the stream accepts some input
-                        stream_core.backpressure_release_notify = Some(context.waker().clone());
+                        //stream_core.backpressure_release_notify = Some(context.waker().clone());
 
                         // Go back to sleep without reading from the stream
                         return true;
@@ -387,7 +387,7 @@ where   Core:       'static+Send+Unpin,
 
                 loop {
                     // Poll the stream
-                    let next = stream.poll_next_unpin(&mut context);
+                    let next: Poll<Option<S::Item>> = Poll::Pending; /* stream.poll_next_unpin(&mut context); */
 
                     match next {
                         // Wait for notification when the stream goes pending
@@ -399,13 +399,13 @@ where   Core:       'static+Send+Unpin,
                         // Invoke the callback when there's some data on the stream
                         Poll::Ready(Some(next)) => {
                             // Pipe the next item through
-                            let next_item = process(core, next).await;
+                            //let next_item = process(core, next).await;
 
                             // Send to the pipe stream, and wake it up
                             let notify = {
                                 let mut stream_core = stream_core.lock().unwrap();
 
-                                stream_core.pending.push_back(next_item);
+                                //stream_core.pending.push_back(next_item);
                                 stream_core.notify.take()
                             };
                             notify.map(|notify| notify.wake());
@@ -416,9 +416,6 @@ where   Core:       'static+Send+Unpin,
                 // The stream core has been released
                 return false;
             }
-            */
-
-            true
         }.boxed()
     });
 
