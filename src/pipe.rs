@@ -107,13 +107,25 @@ where   Core: Send+Unpin {
     ///   desync, it's thrown away
     target: Weak<Desync<Core>>,
 
-    /// The function that should be called to poll this stream
-    poll_fn: Arc<Mutex<PollFn>>
+    /// The function that should be called to poll this stream. Returns false if we should no longer keep polling the stream
+    poll_fn: Arc<Mutex<Option<PollFn>>>
 }
 
 impl<Core, PollFn> PipeContext<Core, PollFn>
 where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+FnMut(&mut Core, Context) -> () {
+        PollFn: 'static+Send+FnMut(&mut Core, Context) -> bool {
+    ///
+    /// Creates a new pipe context, ready to poll
+    ///
+    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContext<Core, PollFn>> {
+        let context = PipeContext {
+            target:     Arc::downgrade(target),
+            poll_fn:    Arc::new(Mutex::new(Some(poll_fn)))
+        };
+
+        Arc::new(context)
+    }
+
     ///
     /// Triggers the poll function in the context of the target desync
     ///
@@ -121,7 +133,7 @@ where   Core:   'static+Send+Unpin,
         // If the desync is stil live...
         if let Some(target) = arc_self.target.upgrade() {
             // Grab the poll function
-            let poll_fn = Arc::clone(&arc_self.poll_fn);
+            let maybe_poll_fn = Arc::clone(&arc_self.poll_fn);
 
             // Schedule a polling operation on the desync
             target.desync(move |core| {
@@ -130,8 +142,15 @@ where   Core:   'static+Send+Unpin,
                 let context = Context::from_waker(&waker);
 
                 // Pass in to the poll function
-                let mut poll_fn = poll_fn.lock().unwrap();
-                (&mut *poll_fn)(core, context);
+                let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
+
+                if let Some(poll_fn) = &mut *maybe_poll_fn {
+                    let keep_polling    = (poll_fn)(core, context);
+                    if !keep_polling {
+                        // Deallocate the function when it's time to stop polling altogether
+                        *maybe_poll_fn = None;
+                    }
+                }
             })
         }
     }
@@ -139,7 +158,7 @@ where   Core:   'static+Send+Unpin,
 
 impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
 where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+FnMut(&mut Core, Context) -> () {
+        PollFn: 'static+Send+FnMut(&mut Core, Context) -> bool {
     fn wake_by_ref(arc_self: &Arc<Self>) {
         Self::poll(Arc::clone(arc_self));
     }
@@ -166,63 +185,34 @@ where   Core:       'static+Send+Unpin,
         S::Item:    Send,
         ProcessFn:  'static+Send+for<'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, ()> {
 
-    // Need a mutable version of the stream
-    let mut stream = Box::new(stream);
+    let mut stream  = stream;
+    let mut process = process;
 
-    // We stop processing once the desync object is no longer used anywhere else
-    let desync = Arc::downgrade(&desync);
+    // The context is used to trigger polling of the stream
+    let context     = PipeContext::new(&desync, move |core, context| {
+        let mut context = context;
 
-    // Wrap the process fn up so we can call it asynchronously
-    // (it doesn't really need to be in a mutex as it's only called by our object but we need to make it pass Rust's checks and we don't have a way to specify this at the moment)
-    let process = Arc::new(Mutex::new(process));
-
-    // Monitor the stream
-    PIPE_MONITOR.monitor(move |context| {
         loop {
-            let desync = desync.upgrade();
+            // Poll the stream
+            let next = stream.poll_next_unpin(&mut context);
 
-            if let Some(desync) = desync {
-                let desync      = LazyDrop::new(desync);
+            match next {
+                // Wait for notification when the stream goes pending
+                Poll::Pending       => return true,
 
-                // Read the current status of the stream
-                let process     = Arc::clone(&process);
-                let next        = stream.poll_next_unpin(context);
+                // Stop polling when the stream stops generating new events
+                Poll::Ready(None)   => return false,
 
-                match next {
-                    // Just wait if the stream is not ready
-                    Poll::Pending => { return Poll::Pending; },
-
-                    // Stop processing when the stream is finished
-                    Poll::Ready(None) => { return Poll::Ready(()); }
-
-                    // Stream returned a value
-                    Poll::Ready(Some(next)) => {
-                        let when_ready = context.waker().clone();
-
-                        // Process the value on the stream
-                        let _ = desync.future(move |core| {
-                            let future = {
-                                let mut process = process.lock().unwrap();
-                                let process     = &mut *process;
-                                process(core, next)
-                            };
-
-                            async move {
-                                future.await;
-                                when_ready.wake();
-                            }.boxed()
-                        });
-
-                        // Wake again when the processing finishes
-                        return Poll::Pending;
-                    },
+                // Invoke the callback when there's some data on the stream
+                Poll::Ready(Some(next)) => {
+                    process(core, next);
                 }
-            } else {
-                // The desync target is no longer available - indicate that we've completed monitoring
-                return Poll::Ready(());
             }
         }
     });
+
+    // Trigger the initial poll
+    PipeContext::poll(context);
 }
 
 ///
