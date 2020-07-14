@@ -51,51 +51,17 @@ use futures::stream::{Stream};
 use futures::task;
 use futures::task::{Poll, Context};
 
-use std::mem;
 use std::sync::*;
 use std::pin::{Pin};
-use std::ops::Deref;
 use std::collections::VecDeque;
 
 lazy_static! {
-    /// The shared queue where we monitor for updates to the active pipe streams
-    static ref PIPE_MONITOR: PipeMonitor = PipeMonitor::new();
-
     /// Desync for disposing of references used in pipes (if a pipe is closed with pending data, this avoids clearing it in the same context as the pipe monitor)
     static ref REFERENCE_CHUTE: Desync<()> = Desync::new(());
 }
 
 /// The maximum number of items to queue on a pipe stream before we stop accepting new input
 const PIPE_BACKPRESSURE_COUNT: usize = 5;
-
-/// Wraps an Arc<> that is dropped on a separate queue
-struct LazyDrop<Core: 'static+Send+Unpin> {
-    reference: Option<Arc<Desync<Core>>>
-}
-
-impl<Core: 'static+Send+Unpin> LazyDrop<Core> {
-    pub fn new(reference: Arc<Desync<Core>>) -> LazyDrop<Core> {
-        LazyDrop {
-            reference: Some(reference)
-        }
-    }
-}
-
-impl<Core: 'static+Send+Unpin> Deref for LazyDrop<Core> {
-    type Target = Desync<Core>;
-
-    fn deref(&self) -> &Desync<Core> {
-        &*(self.reference.as_ref().unwrap())
-    }
-}
-
-impl<Core: 'static+Send+Unpin> Drop for LazyDrop<Core> {
-    fn drop(&mut self) {
-        // Drop the reference down the chute (this ensures that if the Arc<Desync<X>> is freed, it won't block the monitor pipe when the contained Desync synchronises during drop)
-        let reference = self.reference.take();
-        REFERENCE_CHUTE.desync(move |_| mem::drop(reference));
-    }
-}
 
 ///
 /// Futures notifier used to wake up a pipe when a stream or future notifies
@@ -527,89 +493,5 @@ impl<Item> Stream for PipeStream<Item> {
         // If anything needs notifying, do so outside of the lock
         notify.map(|notify| notify.wake());
         result
-    }
-}
-
-///
-/// The main polling component for that implements the stream pipes
-/// 
-struct PipeMonitor {
-}
-
-///
-/// Provides the 'Notify' interface for a polling function with a particular ID
-/// 
-struct PipeNotify {
-    future: Arc<Desync<Option<BoxFuture<'static, ()>>>>
-}
-
-impl PipeMonitor {
-    ///
-    /// Creates a new pipe monitor
-    /// 
-    pub fn new() -> PipeMonitor {
-        PipeMonitor {
-        }
-    }
-
-    ///
-    /// Adds a polling function to the current thread. It will be called using the futures
-    /// notification system (ie, can call things like the stream poll function)
-    /// 
-    pub fn monitor<PollFn>(&self, poll_fn: PollFn)
-    where PollFn: 'static+Send+FnMut(&mut Context) -> Poll<()> {
-        // Turn the polling function into a future (it will complete when monitoring is complete)
-        let poll_fn                 = future::poll_fn(poll_fn).boxed();
-        let poll_fn                 = Arc::new(Desync::new(Some(poll_fn)));
-
-        // Create a notifier that will act as the context for this polling operation
-        let notifier    = PipeNotify {
-            future: Arc::clone(&poll_fn)
-        };
-
-        // Perform the initial polling
-        let notifier    = Arc::new(notifier);
-        let waker       = task::waker(Arc::clone(&notifier));
-        let mut context = Context::from_waker(&waker);
-
-        notifier.poll(&mut context);
-    }
-}
-
-impl PipeNotify {
-    fn poll(&self, context: &mut Context) {
-        // Poll for the next result
-        self.future.sync(|maybe_future| {
-            // Take ownership of the future
-            let mut future = maybe_future.take();
-
-            // Poll for the next result
-            match future.as_mut().map(|future| future.poll_unpin(context)) {
-                // Stop if the future completes (keep the polling function so it's deallocated)
-                None | Some(Poll::Ready(())) => { 
-                    // Drop the future down the reference chute to avoid a potential deadlock
-                    REFERENCE_CHUTE.desync(move |_| mem::drop(future));
-                }
-
-                // Wait for the next event if the future does not complete
-                Some(Poll::Pending) => { *maybe_future = future }
-            }
-        });
-    }
-}
-
-impl task::ArcWake for PipeNotify {
-    fn wake_by_ref(arc_self: &Arc<Self>) {
-        let waker       = task::waker_ref(arc_self);
-        let mut context = Context::from_waker(&waker);
-
-        arc_self.poll(&mut context)
-    }
-
-    fn wake(self: Arc<Self>) {
-        let waker       = task::waker_ref(&self);
-        let mut context = Context::from_waker(&waker);
-
-        self.poll(&mut context)
     }
 }
