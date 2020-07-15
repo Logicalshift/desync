@@ -429,7 +429,11 @@ impl<Item> Drop for PipeStream<Item> {
         core.notify_stream_closed.take().map(|notify_stream_closed| notify_stream_closed.wake());
 
         // Run the drop function
-        self.on_drop.take().map(|mut on_drop| (on_drop)());
+        self.on_drop.take().map(|mut on_drop| {
+            REFERENCE_CHUTE.desync(move |_| {
+                (on_drop)()
+            })
+        });
     }
 }
 
