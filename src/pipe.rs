@@ -234,34 +234,40 @@ where   Core:       'static+Send+Unpin,
         S::Item:    Send,
         ProcessFn:  'static+Send+for<'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, ()> {
 
-    let mut stream  = stream;
-    let mut process = process;
+    let stream      = Arc::new(Mutex::new(stream));
+    let process     = Arc::new(Mutex::new(process));
 
     // The context is used to trigger polling of the stream
-    let context     = PipeContext::new(&desync, move |core, context| {
-        let mut context = context;
+    let context     = PipeContextFuture::new(&desync, move |core, context| {
+        let process = Arc::clone(&process);
+        let stream  = Arc::clone(&stream);
 
-        loop {
-            // Poll the stream
-            let next = stream.poll_next_unpin(&mut context);
+        async move {
+            let mut context = context;
 
-            match next {
-                // Wait for notification when the stream goes pending
-                Poll::Pending       => return true,
+            loop {
+                // Poll the stream
+                let next = stream.lock().unwrap().poll_next_unpin(&mut context);
 
-                // Stop polling when the stream stops generating new events
-                Poll::Ready(None)   => return false,
+                match next {
+                    // Wait for notification when the stream goes pending
+                    Poll::Pending       => return true,
 
-                // Invoke the callback when there's some data on the stream
-                Poll::Ready(Some(next)) => {
-                    process(core, next);
+                    // Stop polling when the stream stops generating new events
+                    Poll::Ready(None)   => return false,
+
+                    // Invoke the callback when there's some data on the stream
+                    Poll::Ready(Some(next)) => {
+                        let process_future = (&mut *process.lock().unwrap())(core, next);
+                        process_future.await;
+                    }
                 }
             }
-        }
+        }.boxed()
     });
 
     // Trigger the initial poll
-    PipeContext::poll(context);
+    PipeContextFuture::poll(context);
 }
 
 ///
