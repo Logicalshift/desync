@@ -66,7 +66,7 @@ const PIPE_BACKPRESSURE_COUNT: usize = 5;
 ///
 /// Futures notifier used to wake up a pipe when a stream or future notifies
 ///
-struct PipeContextFuture<Core, PollFn>
+struct PipeContext<Core, PollFn>
 where   Core: Send+Unpin {
     /// The desync target that will be woken when the stream notifies that it needs to be polled
     ///   We keep a weak reference so that if the stream/future is all that's left referencing the
@@ -77,14 +77,14 @@ where   Core: Send+Unpin {
     poll_fn: Arc<Mutex<Option<PollFn>>>
 }
 
-impl<Core, PollFn> PipeContextFuture<Core, PollFn>
+impl<Core, PollFn> PipeContext<Core, PollFn>
 where   Core:   'static+Send+Unpin,
         PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
     ///
     /// Creates a new pipe context, ready to poll
     ///
-    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContextFuture<Core, PollFn>> {
-        let context = PipeContextFuture {
+    fn new(target: &Arc<Desync<Core>>, poll_fn: PollFn) -> Arc<PipeContext<Core, PollFn>> {
+        let context = PipeContext {
             target:     Arc::downgrade(target),
             poll_fn:    Arc::new(Mutex::new(Some(poll_fn)))
         };
@@ -131,7 +131,7 @@ where   Core:   'static+Send+Unpin,
     }
 }
 
-impl<Core, PollFn> task::ArcWake for PipeContextFuture<Core, PollFn>
+impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
 where   Core:   'static+Send+Unpin,
         PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
     fn wake_by_ref(arc_self: &Arc<Self>) {
@@ -164,7 +164,7 @@ where   Core:       'static+Send+Unpin,
     let process     = Arc::new(Mutex::new(process));
 
     // The context is used to trigger polling of the stream
-    let context     = PipeContextFuture::new(&desync, move |core, context| {
+    let context     = PipeContext::new(&desync, move |core, context| {
         let process = Arc::clone(&process);
         let stream  = Arc::clone(&stream);
 
@@ -193,7 +193,7 @@ where   Core:       'static+Send+Unpin,
     });
 
     // Trigger the initial poll
-    PipeContextFuture::poll(context);
+    PipeContext::poll(context);
 }
 
 ///
@@ -257,7 +257,7 @@ where   Core:       'static+Send+Unpin,
     let stream_core     = Arc::downgrade(&stream_core);
 
     // Create the read context
-    let context             = PipeContextFuture::new(&desync, move |core, context| {
+    let context             = PipeContext::new(&desync, move |core, context| {
         let stream_core     = stream_core.upgrade();
         let mut context     = context;
         let input_stream    = Arc::clone(&input_stream);
@@ -344,7 +344,7 @@ where   Core:       'static+Send+Unpin,
     });
 
     // Poll the context to start the stream running
-    PipeContextFuture::poll(context);
+    PipeContext::poll(context);
 
     output_stream
 }
