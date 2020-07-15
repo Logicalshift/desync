@@ -378,14 +378,14 @@ pub struct PipeStream<Item> {
     core: Arc<Mutex<PipeStreamCore<Item>>>,
 
     /// Called when dropping the output stream
-    on_drop: Option<Box<dyn FnMut() -> ()>>
+    on_drop: Option<Box<dyn Send+Sync+FnMut() -> ()>>
 }
 
 impl<Item> PipeStream<Item> {
     ///
     /// Creates a new, empty, pipestream
     /// 
-    fn new<FnOnDrop: 'static+FnMut() -> ()>(on_drop: FnOnDrop) -> PipeStream<Item> {
+    fn new<FnOnDrop: 'static+Send+Sync+FnMut() -> ()>(on_drop: FnOnDrop) -> PipeStream<Item> {
         PipeStream {
             core: Arc::new(Mutex::new(PipeStreamCore {
                 max_pipe_depth:                 PIPE_BACKPRESSURE_COUNT,
