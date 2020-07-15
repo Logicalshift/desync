@@ -55,6 +55,11 @@ use std::sync::*;
 use std::pin::{Pin};
 use std::collections::VecDeque;
 
+lazy_static! {
+    /// Desync for disposing of references used in pipes (if a pipe is closed with pending data, this avoids clearing it in the same context as the pipe monitor)
+    static ref REFERENCE_CHUTE: Desync<()> = Desync::new(());
+}
+
 /// The maximum number of items to queue on a pipe stream before we stop accepting new input
 const PIPE_BACKPRESSURE_COUNT: usize = 5;
 
