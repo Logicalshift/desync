@@ -18,6 +18,7 @@ use std::collections::vec_deque::*;
 use std::result::{Result};
 
 use futures::channel::oneshot;
+use futures::future;
 use futures::future::{Future};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -244,6 +245,41 @@ impl Scheduler {
 
         // Receive channel will be notified when the job is completed
         receive
+    }
+
+    ///
+    /// Schedules a job to run and returns a future for retrieving the result
+    ///
+    pub fn future_sync<'a, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    where   TFn:                'a+Send+FnOnce() -> TFuture,
+            TFuture:            'a+Send+Future,
+            TFuture::Output:    Send {
+        unimplemented!();
+
+        /*
+        let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
+
+        let perform_job = FutureJob::new(move || {
+            // Create the job when we're queued up
+            let job = job();
+
+            async {
+                // Run the future
+                let val = job.await;
+
+                // Send to the channel
+                send.signal(val);
+            }
+        });
+
+        // Schedule the job
+        self.schedule_job_desync(queue, Box::new(perform_job));
+
+        // Receive channel will be notified when the job is completed
+        receive
+        */
+
+        future::ready(Err(oneshot::Canceled))
     }
 
     ///

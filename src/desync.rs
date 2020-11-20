@@ -100,6 +100,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
+            // Exclusivity is guaranteed because the queue executes only one task at a time
             let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
             sync(&self.queue, move || {
@@ -140,9 +141,31 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
     where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
             TOutput:    'static+Send {
+        // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
+        // because queues only execute one task at a time
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
         scheduler().future(&self.queue, move || {
+            let data        = data.0 as *mut T;
+            let job         = job(unsafe { &mut *data });
+
+            async {
+                job.await
+            }
+        })
+    }
+
+    ///
+    /// Performs an operation asynchronously on the contents of this item, returning a future that must be awaited
+    /// before it is dropped.
+    ///
+    pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    where   TFn:        'a+Send+for<'b> FnOnce(&'b mut T) -> BoxFuture<'b, TOutput>,
+            TOutput:    'a+Send {
+        // The future will have a lifetime shorter than the lifetime of this structure
+        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+
+        scheduler().future_sync(&self.queue, move || {
             let data        = data.0 as *mut T;
             let job         = job(unsafe { &mut *data });
 
