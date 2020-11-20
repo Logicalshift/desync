@@ -95,21 +95,13 @@ where   TFn:                Unpin+Send+FnOnce() -> TFuture,
                         match recv.poll_unpin(context) {
                             Poll::Ready(Ok(())) => {
                                 // Start the future
-                                let mut future = create_future();
+                                let future = create_future();
 
                                 // Poll it immediately to determine its status
-                                if let Poll::Ready(future_result) = future.poll_unpin(context) {
-                                    // Future has completed
-                                    result = Poll::Pending;
-                                    self.task_finished.take().map(|finished| finished.send(()));
+                                result = Poll::Pending;
 
-                                    retry = true;
-                                    WaitingForScheduler(Box::new(future_result))
-                                } else {
-                                    // Future is still running
-                                    result = Poll::Pending;
-                                    WaitingForFuture(future)
-                                }
+                                retry = true;
+                                WaitingForFuture(future)
                             }
 
                             Poll::Ready(Err(_)) => {
