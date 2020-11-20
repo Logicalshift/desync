@@ -49,6 +49,7 @@ mod desync_scheduler;
 mod core;
 mod job;
 mod future_job;
+mod future_sync;
 mod unsafe_job;
 mod scheduler_thread;
 mod job_queue;

@@ -3,6 +3,7 @@
 use super::core::*;
 use super::job::*;
 use super::future_job::*;
+use super::future_sync::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
 use super::job_queue::*;
@@ -279,7 +280,7 @@ impl Scheduler {
         receive
         */
 
-        future::ready(Err(oneshot::Canceled))
+        SyncFuture::new(job)
     }
 
     ///
