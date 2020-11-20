@@ -18,8 +18,8 @@ use std::sync::*;
 use std::collections::vec_deque::*;
 use std::result::{Result};
 
+use futures::prelude::*;
 use futures::channel::oneshot;
-use futures::future;
 use futures::future::{Future};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -255,6 +255,9 @@ impl Scheduler {
     where   TFn:                'a+Send+FnOnce() -> TFuture,
             TFuture:            'a+Send+Future,
             TFuture::Output:    Send {
+        // Box the job (so it implements Unpin)
+        let job = Box::new(job);
+
         // We need two channels to signal that the future is ready to run
         let (queue_ready_send, queue_ready_recv)    = oneshot::channel();
         let (done_send, done_recv)                  = oneshot::channel();
@@ -276,8 +279,8 @@ impl Scheduler {
 
         self.schedule_job_desync(queue, Box::new(signal_job));
 
-        // The actual job is run by a SyncFuture
-        SyncFuture::new(job, receive, queue_ready_recv, done_send)
+        // The actual job is run by a SyncFuture (we box that so that it also implements Unpin)
+        SyncFuture::new(move || job().boxed(), receive, queue_ready_recv, done_send)
     }
 
     ///

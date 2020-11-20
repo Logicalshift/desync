@@ -5,6 +5,7 @@ use futures::task;
 use futures::task::{Poll};
 use futures::channel::oneshot;
 
+use std::mem;
 use std::pin::*;
 
 ///
@@ -60,12 +61,36 @@ where   TFn:                Send+FnOnce() -> TFuture,
 }
 
 impl<TFn, TFuture> Future for SyncFuture<TFn, TFuture>
-where   TFn:                Send+FnOnce() -> TFuture,
-        TFuture:            Send+Future,
+where   TFn:                Unpin+Send+FnOnce() -> TFuture,
+        TFuture:            Unpin+Send+Future,
         TFuture::Output:    Send {
     type Output = Result<TFuture::Output, oneshot::Canceled>;
 
-    fn poll(self: Pin<&mut Self>, context: &mut task::Context) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, context: &mut task::Context) -> Poll<Self::Output> {
+        use self::SyncFutureState::*;
+
+        // Rust doesn't seem to have a way to let us update the state in-place, so we need to swap out the old state and swap in the new state
+        let mut state = Completed;
+        mem::swap(&mut state, &mut self.state);
+
+        // Update the state now we own it
+        state = match state {
+            WaitingForQueue(recv, create_future) => {
+                WaitingForQueue(recv, create_future)
+            }
+
+            WaitingForFuture(future) => {
+                WaitingForFuture(future)
+            }
+
+            Completed => {
+                Completed
+            }
+        };
+
+        // Swap the state back into the structure
+        self.state = Completed;
+
         unimplemented!()
     }
 }
