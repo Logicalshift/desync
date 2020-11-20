@@ -131,6 +131,17 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     }
 
     ///
+    /// Deprecated name for `future_desync`
+    ///
+    #[inline]
+    #[deprecated(since="0.7.0", note="please use either `future_desync` or `future_sync` to schedule futures")]
+    pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
+            TOutput:    'static+Send {
+        self.future_desync(job)
+    }
+
+    ///
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
     ///
