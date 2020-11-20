@@ -149,7 +149,7 @@ fn update_data_with_future_sync_1000_times() {
                 
                 assert!(future.await.unwrap() == 43);
             });
-        }, 5000);
+        }, 500);
     }
 }
 
