@@ -1,9 +1,26 @@
+use super::scheduler_future::*;
+
 use futures::prelude::*;
 use futures::task;
 use futures::task::{Poll};
 use futures::channel::oneshot;
 
 use std::pin::*;
+
+///
+/// The state of a SyncFuture operation
+///
+enum SyncFutureState<TFn, TFuture>
+where TFuture: Future {
+    /// Waiting for the queue to start running the future
+    WaitingForQueue(oneshot::Receiver<()>, TFn),
+
+    /// Evaluating an active future for its result
+    WaitingForFuture(TFuture),
+
+    /// Finished evaluating
+    Completed
+}
 
 ///
 /// Represents a future that runs synchronously with a queue
@@ -16,8 +33,14 @@ pub struct SyncFuture<TFn, TFuture>
 where   TFn:                Send+FnOnce() -> TFuture,
         TFuture:            Send+Future,
         TFuture::Output:    Send {
-    /// Callback function that starts the synchronous future running (or None if it's already started)
-    create_future: Option<TFn>
+    /// The state of this future
+    state: SyncFutureState<TFn, TFuture>,
+
+    /// Tracks this future on the scheduler (this allows polling this future to invoke desync's thread-stealing semantics instead of leaving the queue scheduling to a separate thread)
+    scheduler_future: SchedulerFuture<()>,
+
+    /// Signals when the future has finished running (None if this future is completed)
+    task_finished: Option<oneshot::Sender<()>>
 }
 
 impl<TFn, TFuture> SyncFuture<TFn, TFuture>
@@ -27,9 +50,11 @@ where   TFn:                Send+FnOnce() -> TFuture,
     ///
     /// Creates a new SyncFuture
     ///
-    pub fn new(create_future: TFn) -> SyncFuture<TFn, TFuture> {
+    pub fn new(create_future: TFn, scheduler_future: SchedulerFuture<()>, queue_ready: oneshot::Receiver<()>, task_finished: oneshot::Sender<()>) -> SyncFuture<TFn, TFuture> {
         SyncFuture {
-            create_future: Some(create_future)
+            state:              SyncFutureState::WaitingForQueue(queue_ready, create_future),
+            scheduler_future:   scheduler_future,
+            task_finished:      Some(task_finished)
         }
     }
 }

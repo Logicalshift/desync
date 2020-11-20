@@ -255,32 +255,29 @@ impl Scheduler {
     where   TFn:                'a+Send+FnOnce() -> TFuture,
             TFuture:            'a+Send+Future,
             TFuture::Output:    Send {
-        unimplemented!();
+        // We need two channels to signal that the future is ready to run
+        let (queue_ready_send, queue_ready_recv)    = oneshot::channel();
+        let (done_send, done_recv)                  = oneshot::channel();
 
-        /*
+        // Create the scheduler future
         let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
-        let perform_job = FutureJob::new(move || {
-            // Create the job when we're queued up
-            let job = job();
-
+        // Create the job to perform on the queue. This signals when the future starts and waits for the job to complete
+        let signal_job = FutureJob::new(move || {
             async {
-                // Run the future
-                let val = job.await;
+                // Signal that the job should start
+                queue_ready_send.send(()).ok();
 
-                // Send to the channel
-                send.signal(val);
+                // Wait for the job to complete (if cancelled, the SyncFuture was dropped, which means it's safe to continue)
+                done_recv.await.ok();
+                send.signal(());
             }
         });
 
-        // Schedule the job
-        self.schedule_job_desync(queue, Box::new(perform_job));
+        self.schedule_job_desync(queue, Box::new(signal_job));
 
-        // Receive channel will be notified when the job is completed
-        receive
-        */
-
-        SyncFuture::new(job)
+        // The actual job is run by a SyncFuture
+        SyncFuture::new(job, receive, queue_ready_recv, done_send)
     }
 
     ///
