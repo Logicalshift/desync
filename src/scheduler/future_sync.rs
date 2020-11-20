@@ -19,6 +19,9 @@ where TFuture: Future {
     /// Evaluating an active future for its result
     WaitingForFuture(TFuture),
 
+    /// The sync future has completed and now we're waiting for the scheduler to complete
+    WaitingForScheduler(Box<TFuture::Output>),
+
     /// Finished evaluating
     Completed
 }
@@ -93,9 +96,9 @@ where   TFn:                Unpin+Send+FnOnce() -> TFuture,
                             // Poll it immediately to determine its status
                             if let Poll::Ready(future_result) = future.poll_unpin(context) {
                                 // Future has completed
-                                result = Poll::Ready(Ok(future_result));
+                                result = Poll::Pending;
                                 self.task_finished.take().map(|finished| finished.send(()));
-                                Completed
+                                WaitingForScheduler(Box::new(future_result))
                             } else {
                                 // Future is still running
                                 result = Poll::Pending;
@@ -121,13 +124,24 @@ where   TFn:                Unpin+Send+FnOnce() -> TFuture,
             WaitingForFuture(mut future) => {
                 if let Poll::Ready(future_result) = future.poll_unpin(context) {
                     // Future has completed
-                    result = Poll::Ready(Ok(future_result));
+                    result = Poll::Pending;
                     self.task_finished.take().map(|finished| finished.send(()));
-                    Completed
+                    WaitingForScheduler(Box::new(future_result))
                 } else {
                     // Future is still running
                     result = Poll::Pending;
                     WaitingForFuture(future)
+                }
+            }
+
+            WaitingForScheduler(future_result) => {
+                // Poll until the scheduler has finished running the task entirely (can deadlock while draining if we don't)
+                if let Poll::Ready(_) = self.scheduler_future.poll_unpin(context) {
+                    result = Poll::Ready(Ok(*future_result));
+                    Completed
+                } else {
+                    result = Poll::Pending;
+                    WaitingForScheduler(future_result)
                 }
             }
 
