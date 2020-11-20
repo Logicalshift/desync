@@ -18,7 +18,7 @@ fn schedule_future() {
         use futures::executor;
 
         let queue       = queue();
-        let future      = future(&queue, move || async {
+        let future      = future_desync(&queue, move || async {
             thread::sleep(Duration::from_millis(100));
             42
         });
@@ -41,7 +41,7 @@ fn schedule_future_with_no_scheduler_threads() {
         scheduler.despawn_threads_if_overloaded();
 
         let queue       = queue();
-        let future      = scheduler.future(&queue, move || async {
+        let future      = scheduler.future_desync(&queue, move || async {
             thread::sleep(Duration::from_millis(100));
             42
         });
@@ -66,7 +66,7 @@ fn wake_future_with_no_scheduler_threads() {
 
         // Schedule a future that will block until we send a value
         let queue       = queue();
-        let future      = scheduler.future(&queue, move || async {
+        let future      = scheduler.future_desync(&queue, move || async {
             rx.await.expect("Receive result")
         });
 
@@ -200,11 +200,11 @@ fn poll_two_futures_on_one_queue() {
     let wake2           = Arc::new(TestWaker { awake: Mutex::new(false) });
 
     // Wait for done1 then done2 to signal
-    let mut future_1    = scheduler.future(&queue, move || {
+    let mut future_1    = scheduler.future_desync(&queue, move || {
         async move { recv1.await.ok(); }
     });
 
-    let mut future_2    = scheduler.future(&queue, move || {
+    let mut future_2    = scheduler.future_desync(&queue, move || {
         async move { recv2.await.ok(); }
     });
 

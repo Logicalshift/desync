@@ -145,7 +145,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
         // because queues only execute one task at a time
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
-        scheduler().future(&self.queue, move || {
+        scheduler().future_desync(&self.queue, move || {
             let data        = data.0 as *mut T;
             let job         = job(unsafe { &mut *data });
 

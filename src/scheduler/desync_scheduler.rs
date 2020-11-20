@@ -220,9 +220,12 @@ impl Scheduler {
     }
 
     ///
-    /// Schedules a job to run and returns a future for retrieving the result
+    /// Schedules a job to run asynchronously and returns a future for retrieving the result
     ///
-    pub fn future<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
+    /// pool (ie, will run even if the current thread is blocked)
+    ///
+    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
     where   TFn:                'static+Send+FnOnce() -> TFuture,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
@@ -250,6 +253,10 @@ impl Scheduler {
 
     ///
     /// Schedules a job to run and returns a future for retrieving the result
+    ///
+    /// The future will cancel if the return value is discarded, and will run in the current execution context. These futures are
+    /// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
+    /// to use when borrowing values.
     ///
     pub fn future_sync<'a, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
     where   TFn:                'a+Send+FnOnce() -> TFuture,
@@ -318,7 +325,7 @@ impl Scheduler {
         let (finished_suspending, notify_finished_suspending) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         // Queue a future (we never await it though)
-        let _future = self.future(queue, move || {
+        let _future = self.future_desync(queue, move || {
             // Create a channel for resuming the queue
             let (resume, wait_for_resume)   = oneshot::channel();
 
@@ -623,13 +630,30 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 }
 
 ///
-/// Schedules a job to run and returns a future for retrieving the result
+/// Schedules a job to run asynchronously and returns a future for retrieving the result
 ///
-pub fn future<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+/// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
+/// pool (ie, will run even if the current thread is blocked)
+///
+pub fn future_desync<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
 where   TFn:                'static+Send+FnOnce() -> TFuture,
         TFuture:            'static+Send+Future,
         TFuture::Output:    Send {
-    scheduler().future(queue, job)
+    scheduler().future_desync(queue, job)
+}
+
+///
+/// Schedules a job to run and returns a future for retrieving the result
+///
+/// The future will cancel if the return value is discarded, and will run in the current execution context. These futures are
+/// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
+/// to use when borrowing values.
+///
+pub fn future_sync<'a, TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+where   TFn:                'a+Send+FnOnce() -> TFuture,
+        TFuture:            'a+Send+Future,
+        TFuture::Output:    Send {
+    scheduler().future_sync(queue, job)
 }
 
 ///
