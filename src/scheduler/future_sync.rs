@@ -70,27 +70,77 @@ where   TFn:                Unpin+Send+FnOnce() -> TFuture,
         use self::SyncFutureState::*;
 
         // Rust doesn't seem to have a way to let us update the state in-place, so we need to swap out the old state and swap in the new state
+        let result;
         let mut state = Completed;
         mem::swap(&mut state, &mut self.state);
 
         // Update the state now we own it
         state = match state {
-            WaitingForQueue(recv, create_future) => {
-                WaitingForQueue(recv, create_future)
+            WaitingForQueue(mut recv, create_future) => {
+                // Check the scheduler future (give it a chance to steal the thread)
+                if let Poll::Ready(Err(_)) = self.scheduler_future.poll_unpin(context) {
+                    // The queue will never get to the point of polling this future
+                    result = Poll::Ready(Err(oneshot::Canceled));
+                    self.task_finished.take().map(|finished| finished.send(()));
+                    Completed
+                } else {
+                    // Poll the receiver
+                    match recv.poll_unpin(context) {
+                        Poll::Ready(Ok(())) => {
+                            // Start the future
+                            let mut future = create_future();
+
+                            // Poll it immediately to determine its status
+                            if let Poll::Ready(future_result) = future.poll_unpin(context) {
+                                // Future has completed
+                                result = Poll::Ready(Ok(future_result));
+                                self.task_finished.take().map(|finished| finished.send(()));
+                                Completed
+                            } else {
+                                // Future is still running
+                                result = Poll::Pending;
+                                WaitingForFuture(future)
+                            }
+                        }
+
+                        Poll::Ready(Err(_)) => {
+                            // Future never became ready
+                            result = Poll::Ready(Err(oneshot::Canceled));
+                            Completed
+                        }
+
+                        Poll::Pending => {
+                            // Waiting for the queue to start this future
+                            result = Poll::Pending;
+                            WaitingForQueue(recv, create_future)
+                        }
+                    }
+                }
             }
 
-            WaitingForFuture(future) => {
-                WaitingForFuture(future)
+            WaitingForFuture(mut future) => {
+                if let Poll::Ready(future_result) = future.poll_unpin(context) {
+                    // Future has completed
+                    result = Poll::Ready(Ok(future_result));
+                    self.task_finished.take().map(|finished| finished.send(()));
+                    Completed
+                } else {
+                    // Future is still running
+                    result = Poll::Pending;
+                    WaitingForFuture(future)
+                }
             }
 
             Completed => {
+                // Polling after the result has been returned
+                result = Poll::Ready(Err(oneshot::Canceled));
                 Completed
             }
         };
 
         // Swap the state back into the structure
-        self.state = Completed;
+        self.state = state;
 
-        unimplemented!()
+        result
     }
 }
