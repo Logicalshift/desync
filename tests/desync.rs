@@ -110,6 +110,50 @@ fn update_data_with_future_1000_times() {
 }
 
 #[test]
+fn update_data_with_future_sync() {
+    timeout(|| {
+        use futures::executor;
+
+        let desynced = Desync::new(TestData { val: 0 });
+
+        desynced.desync(|data| {
+            sleep(Duration::from_millis(100));
+            data.val = 42;
+        });
+
+        executor::block_on(async {
+            let future = desynced.future_sync(|data| { Box::pin(future::ready(data.val)) });
+            assert!(future.await.unwrap() == 42);
+        });
+    }, 500);
+}
+
+#[test]
+fn update_data_with_future_sync_1000_times() {
+    // Seems to timeout fairly reliably after signalling the future
+    use futures::executor;
+
+    for _i in 0..1000 {
+        timeout(|| {
+            let desynced = Desync::new(TestData { val: 0 });
+
+            desynced.desync(|data| {
+                data.val = 42;
+            });
+            desynced.desync(|data| {
+                data.val = 43;
+            });
+
+            executor::block_on(async {
+                let future = desynced.future_sync(|data| Box::pin(future::ready(data.val)));
+                
+                assert!(future.await.unwrap() == 43);
+            });
+        }, 5000);
+    }
+}
+
+#[test]
 fn dropping_while_running_isnt_obviously_bad() {
     let desynced = Desync::new(TestData { val: 0 });
 
