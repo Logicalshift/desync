@@ -69,7 +69,7 @@
 //! to perform operations asynchronously, this provides a useful way to immediately parallelize
 //! long-running operations.
 //! 
-//! The `future()` action returns a boxed Future that can be used with other libraries that use them. It's 
+//! The `future_sync()` action returns a boxed Future that can be used with other libraries that use them. It's 
 //! conceptually the same as `sync`, except that it doesn't wait for the operation to complete:
 //! 
 //! ```
@@ -88,7 +88,7 @@
 //! #     thread::sleep(Duration::from_millis(100));
 //! #     *val = 42;
 //! # });
-//! let future_number = number.future(|val| future::ready(*val).boxed());
+//! let future_number = number.future_sync(|val| future::ready(*val).boxed());
 //! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
 //! ```

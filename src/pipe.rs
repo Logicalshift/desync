@@ -102,7 +102,7 @@ where   Core:   'static+Send+Unpin,
             let maybe_poll_fn = Arc::clone(&arc_self.poll_fn);
 
             // Schedule a polling operation on the desync
-            let _ = target.future(move |core| {
+            let _ = target.future_desync(move |core| {
                 async move {
                     // Create a futures context from the context reference
                     let waker   = task::waker_ref(&arc_self);
