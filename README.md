@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-desync = "0.5"
+desync = "0.7"
 ```
 
 Desync is a library for Rust that provides a model of concurrency based around the idea of 
