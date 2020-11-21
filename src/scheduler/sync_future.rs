@@ -136,7 +136,7 @@ where   TFn:                Unpin+Send+FnOnce() -> TFuture,
 
                 WaitingForScheduler(future_result) => {
                     // Poll until the scheduler has finished running the task entirely (can deadlock while draining if we don't)
-                    if true {
+                    if let Poll::Ready(_) = self.scheduler_future.poll_unpin(context) {
                         result = Poll::Ready(Ok(*future_result));
                         Completed
                     } else {
