@@ -247,6 +247,38 @@ fn wait_for_desync_future_from_sync_future() {
 }
 
 #[test]
+fn wait_for_sync_future_from_sync_future() {
+    use futures::executor;
+
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let nested_future   = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
+            let desync_future   = future_sync(&queue2, move || { async move { nested_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Wait for the desync future in an executor
+            executor::block_on(async move { 
+                desync_future.await.ok();
+            });
+
+            // Run sync on both queues
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 5000);
+}
+
+#[test]
 fn poll_two_futures_on_one_queue() {
     // 0 threads so we force the future to act in 'drain' mode
     let scheduler   = Scheduler::new();
