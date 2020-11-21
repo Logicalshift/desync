@@ -3,12 +3,12 @@
 use super::core::*;
 use super::job::*;
 use super::future_job::*;
-use super::future_sync::*;
 use super::unsafe_job::*;
 use super::scheduler_thread::*;
 use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
+use super::sync_future::*;
 use super::scheduler_future::*;
 use super::queue_resumer::*;
 use super::try_sync_error::*;
