@@ -135,6 +135,9 @@ pub struct SchedulerFuture<T> {
     /// The scheduler core that this future belongs to
     scheduler: Arc<SchedulerCore>,
 
+    /// Set to true if this future has claimed ownership of the queue to drain it
+    draining: bool,
+
     /// A container for the result of this scheduler future
     result: Arc<Mutex<SchedulerFutureResult<T>>>
 }
@@ -247,6 +250,7 @@ impl<T> SchedulerFuture<T> {
             id:         FutureId::new(),
             queue:      Arc::clone(queue),
             scheduler:  core,
+            draining:   false,
             result:     Arc::clone(&result)
         };
 
@@ -262,6 +266,8 @@ impl<T> SchedulerFuture<T> {
         // Set the queue as active
         let _active     = ActiveQueue { queue: &*self.queue };
         let mut result;
+
+        self.draining = true;
 
         // While there is no result, run a job from the queue
         loop {
@@ -304,6 +310,7 @@ impl<T> SchedulerFuture<T> {
                             waker.wake_with(queue_waker);
 
                             // The future is ready (job will be rescheduled in the background)
+                            self.draining = false;
                             return task::Poll::Ready(result.unwrap());
                         } else {
                             // Wait for the next poll
@@ -313,6 +320,7 @@ impl<T> SchedulerFuture<T> {
                             waker.wake_with(context.waker().clone());
 
                             // Result is pending
+                            self.draining = true;
                             return task::Poll::Pending;
                         }
                     }
@@ -327,6 +335,7 @@ impl<T> SchedulerFuture<T> {
                 self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
                 self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
 
+                self.draining = false;
                 return task::Poll::Pending;
             }
         }
@@ -340,6 +349,7 @@ impl<T> SchedulerFuture<T> {
         self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
 
         // Result must be available by this point
+        self.draining = false;
         task::Poll::Ready(result.unwrap())
     }
 }
