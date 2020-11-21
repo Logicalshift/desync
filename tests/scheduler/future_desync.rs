@@ -264,3 +264,35 @@ fn poll_two_futures_on_one_queue() {
     // TODO: not actually sure if this is bad behaviour or not but if future_2 is polled first, future_1 won't be available until future_2
     //      completes. This is another 0 thread only issue as future_1 will be able to send its notification when the thread pool is available.
 }
+
+#[test]
+fn wait_for_desync_future_from_desync_future() {
+    use futures::executor;
+
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let nested_future   = future_desync(&queue1, move || { async move { recv1.await.ok(); } });
+            let desync_future   = future_desync(&queue2, move || { async move { nested_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Wait for the desync future in an executor
+            executor::block_on(async move { 
+                desync_future.await.ok();
+            });
+
+            // Run sync on both queues
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 5000);
+}
