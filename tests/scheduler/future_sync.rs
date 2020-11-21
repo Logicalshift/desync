@@ -236,7 +236,7 @@ fn poll_two_futures_on_one_queue() {
     assert!((*wake1.awake.lock().unwrap()) == true);
 
     // Retrieve the result for future_1
-    let waker_ref           = task::waker_ref(&wake2);
+    let waker_ref           = task::waker_ref(&wake1);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
     assert!(future_1.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));
