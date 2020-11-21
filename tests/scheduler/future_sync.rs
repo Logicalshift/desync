@@ -226,11 +226,12 @@ fn poll_two_futures_on_one_queue() {
     let waker_ref           = task::waker_ref(&wake2);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
+    // Poll the other future: it should be pending as it's waiting to be scheduled
     assert!(future_2.poll_unpin(&mut ctxt) == Poll::Pending);
 
     done2.send(()).unwrap();
 
-    // future_1 should be signalled for polling, future_2 should not
+    // future_1 should be signalled for polling, future_2 should not (as it can't start until future_1 is finished)
     assert!((*wake2.awake.lock().unwrap()) == false);
     assert!((*wake1.awake.lock().unwrap()) == true);
 
