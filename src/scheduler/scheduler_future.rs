@@ -354,6 +354,25 @@ impl<T> SchedulerFuture<T> {
     }
 }
 
+impl<T> Drop for SchedulerFuture<T> {
+    fn drop(&mut self) {
+        // Reschedule the queue in the background if we're draining the queue
+        if self.draining {
+            {
+                // The core should be in the 'waiting for poll' state
+                let mut core = self.queue.core.lock().expect("JobQueue core lock");
+                debug_assert!(match core.state { QueueState::WaitingForPoll(_) => true, _ => false });
+
+                // Core is now idle
+                core.state = QueueState::Idle;
+            }
+
+            // Reschedule the queue
+            self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+        }
+    }
+}
+
 impl<T> Future for SchedulerFuture<T> {
     type Output = Result<T, oneshot::Canceled>;
 
