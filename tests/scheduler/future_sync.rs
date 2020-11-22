@@ -227,17 +227,14 @@ fn wait_for_sync_future_from_desync_future_without_awaiting() {
             let (done1, recv1)  = oneshot::channel::<()>();
 
             let sync_future     = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
-            let _desync_future  = future_desync(&queue2, move || { async move { sync_future.await.ok(); println!("Future complete"); } });
+            let _desync_future  = future_desync(&queue2, move || { async move { sync_future.await.ok(); } });
 
             // Signal
             done1.send(()).unwrap();
 
-            // Run sync on both queues
-            println!("Q1");
-            sync(&queue1, move || { println!("  OK"); });
-            println!("Q2");
-            sync(&queue2, move || { println!("  OK"); });
-            println!("Drop");
+            // Run sync on both queues (these will schedule after the two futures have completed)
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
         }
     }, 500);
 }
