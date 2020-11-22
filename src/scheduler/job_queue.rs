@@ -135,10 +135,9 @@ impl JobQueue {
 
                 // If the queue is empty at the point where we obtain the lock, we can deactivate ourselves
                 if core.queue.len() == 0 {
-                    core.state = match core.state {
-                        QueueState::Running         => QueueState::Idle,
-                        x                           => x
-                    };
+                    if core.state.is_running() {
+                        core.state = QueueState::Idle;
+                    }
                     done = true;
                 } else if core.state == QueueState::Pending {
                     // Will restart when we get re-scheduled
