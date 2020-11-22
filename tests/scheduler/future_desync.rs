@@ -30,6 +30,19 @@ fn schedule_future() {
 }
 
 #[test]
+fn read_sync_result() {
+    timeout(|| {
+        let queue       = queue();
+        let future      = future_desync(&queue, move || async {
+            thread::sleep(Duration::from_millis(100));
+            42
+        });
+
+        assert!(future.sync().unwrap() == 42);
+    }, 500);
+}
+
+#[test]
 fn schedule_future_with_no_scheduler_threads() {
     timeout(|| {
         use futures::executor;

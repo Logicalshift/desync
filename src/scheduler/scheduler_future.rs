@@ -3,6 +3,7 @@ use super::queue_state::*;
 use super::core::*;
 use super::active_queue::*;
 use super::wake_queue::*;
+use super::desync_scheduler::*;
 
 use futures::prelude::*;
 use futures::channel::oneshot;
@@ -133,7 +134,7 @@ pub struct SchedulerFuture<T> {
     queue: Arc<JobQueue>,
 
     /// The scheduler core that this future belongs to
-    scheduler: Arc<SchedulerCore>,
+    scheduler: Scheduler,
 
     /// Set to true if this future has claimed ownership of the queue to drain it
     draining: bool,
@@ -249,12 +250,44 @@ impl<T> SchedulerFuture<T> {
         let future = SchedulerFuture {
             id:         FutureId::new(),
             queue:      Arc::clone(queue),
-            scheduler:  core,
+            scheduler:  Scheduler { core },
             draining:   false,
             result:     Arc::clone(&result)
         };
 
         (future, SchedulerFutureSignaller(result))
+    }
+
+    ///
+    /// Detaches from this future, leaving it to run in the background on the main desync scheduler
+    ///
+    #[inline]
+    pub fn detach(self) {
+        // Nothing to do, this just drops the future
+    }
+
+    ///
+    /// Synchronously waits for this future to be completed by the scheduler, then returns the result
+    ///
+    pub fn sync(self) -> Result<T, oneshot::Canceled> {
+        // See if the result has arrived yet
+        let result = self.result.lock().expect("Scheduler future result").result.take();
+        if let Some(result) = result {
+            return result;
+        }
+
+        // Synchronise with the queue
+        // TODO: if future tasks have been queued, this will wait for those as well
+        self.scheduler.sync(&self.queue, || {});
+
+        // The result should now be available
+        let result = self.result.lock().expect("Scheduler future result").result.take();
+        if let Some(result) = result {
+            return result;
+        } else {
+            // The future never completed (or the result has been stolen somewhere else somehow)
+            return Err(oneshot::Canceled);
+        }
     }
 
     ///
@@ -303,7 +336,7 @@ impl<T> SchedulerFuture<T> {
                             // Wake the queue in the background if needed (the result has arrived)
                             self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForWake;
 
-                            let queue_waker = WakeQueue(Arc::clone(&self.queue), Arc::clone(&self.scheduler));
+                            let queue_waker = WakeQueue(Arc::clone(&self.queue), Arc::clone(&self.scheduler.core));
                             let queue_waker = Arc::new(queue_waker);
                             let queue_waker = task::waker(queue_waker);
 
@@ -333,7 +366,7 @@ impl<T> SchedulerFuture<T> {
                 
                 // Reschedule the queue
                 self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
-                self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+                self.scheduler.core.reschedule_queue(&self.queue, Arc::clone(&self.scheduler.core));
 
                 self.draining = false;
                 return task::Poll::Pending;
@@ -346,7 +379,7 @@ impl<T> SchedulerFuture<T> {
         // here. As we've set the queue state to running while we're busy, the thread won't
         // start the queue while it's already running.
         self.queue.core.lock().expect("JobQueue core lock").state = QueueState::Idle;
-        self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+        self.scheduler.core.reschedule_queue(&self.queue, Arc::clone(&self.scheduler.core));
 
         // Result must be available by this point
         self.draining = false;
@@ -368,7 +401,7 @@ impl<T> Drop for SchedulerFuture<T> {
             }
 
             // Reschedule the queue
-            self.scheduler.reschedule_queue(&self.queue, Arc::clone(&self.scheduler));
+            self.scheduler.core.reschedule_queue(&self.queue, Arc::clone(&self.scheduler.core));
         }
     }
 }
@@ -434,7 +467,6 @@ impl<T> Future for SchedulerFuture<T> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use super::super::desync_scheduler::*;
 
     #[test]
     fn returns_immediately_if_signaled() {
