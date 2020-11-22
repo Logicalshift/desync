@@ -215,6 +215,34 @@ fn wait_for_sync_future_from_desync_future() {
 }
 
 #[test]
+fn wait_for_sync_future_from_desync_future_without_awaiting() {
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let sync_future     = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
+            let _desync_future  = future_desync(&queue2, move || { async move { sync_future.await.ok(); println!("Future complete"); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Run sync on both queues
+            println!("Q1");
+            sync(&queue1, move || { println!("  OK"); });
+            println!("Q2");
+            sync(&queue2, move || { println!("  OK"); });
+            println!("Drop");
+        }
+    }, 500);
+}
+
+#[test]
 fn wait_for_desync_future_from_sync_future() {
     use futures::executor;
 
