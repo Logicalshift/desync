@@ -273,17 +273,17 @@ fn double_future_and_sync() {
     let initiator_3 = Desync::new(None);
 
     let core_1      = Arc::clone(&core);
-    let _           = initiator_1.future_desync(move |val| {
+    initiator_1.future_desync(move |val| {
         async move {
             // Wait for a task on the core
             *val = core_1.future_desync(move |_| {
                 async move { thread::sleep(Duration::from_millis(400)); Some(1) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     let core_2      = Arc::clone(&core);
-    let _           = initiator_2.future_desync(move |val| {
+    initiator_2.future_desync(move |val| {
         async move {
             // Wait for the original initiator to start its future
             thread::sleep(Duration::from_millis(100));
@@ -293,10 +293,10 @@ fn double_future_and_sync() {
                 async move { thread::sleep(Duration::from_millis(200)); Some(2) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     let core_3      = Arc::clone(&core);
-    let _           = initiator_3.future_desync(move |val| {
+    initiator_3.future_desync(move |val| {
         async move {
             // Wait for the original initiator to start its future
             thread::sleep(Duration::from_millis(200));
@@ -306,7 +306,7 @@ fn double_future_and_sync() {
                 async move { thread::sleep(Duration::from_millis(200)); Some(3) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     // Wait for the result from the futures synchronously
     assert!(initiator_3.sync(|val| { *val }) == Some(3));

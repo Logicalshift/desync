@@ -325,7 +325,7 @@ impl Scheduler {
         let (finished_suspending, notify_finished_suspending) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         // Queue a future (we never await it though)
-        let _future = self.future_desync(queue, move || {
+        self.future_desync(queue, move || {
             // Create a channel for resuming the queue
             let (resume, wait_for_resume)   = oneshot::channel();
 
@@ -337,7 +337,7 @@ impl Scheduler {
 
             // Wait for the queue to resume
             wait_for_resume
-        });
+        }).detach();
 
         // Return the finished_suspending future
         finished_suspending
