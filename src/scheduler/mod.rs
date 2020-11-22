@@ -65,3 +65,4 @@ pub use self::desync_scheduler::*;
 pub use self::job_queue::{JobQueue};
 pub use self::queue_resumer::{QueueResumer};
 pub use self::try_sync_error::{TrySyncError};
+pub use self::scheduler_future::{SchedulerFuture};

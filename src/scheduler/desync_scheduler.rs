@@ -225,7 +225,7 @@ impl Scheduler {
     /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
     /// pool (ie, will run even if the current thread is blocked)
     ///
-    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
     where   TFn:                'static+Send+FnOnce() -> TFuture,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
@@ -635,7 +635,7 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
 /// pool (ie, will run even if the current thread is blocked)
 ///
-pub fn future_desync<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+pub fn future_desync<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
 where   TFn:                'static+Send+FnOnce() -> TFuture,
         TFuture:            'static+Send+Future,
         TFuture::Output:    Send {
