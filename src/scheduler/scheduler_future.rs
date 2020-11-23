@@ -126,7 +126,7 @@ pub (super) struct SchedulerFutureSignaller<T>(Arc<Mutex<SchedulerFutureResult<T
 /// If polled when no threads are available, this future will run synchronously on the current thread
 /// (stealing its execution time rather than blocking)
 ///
-pub struct SchedulerFuture<T> {
+pub struct SchedulerFuture<T: Send> {
     /// The unique ID of this future
     id: FutureId,
 
@@ -234,7 +234,7 @@ enum SchedulerAction<T> {
     Panic
 }
 
-impl<T> SchedulerFuture<T> {
+impl<T: Send> SchedulerFuture<T> {
     ///
     /// Creates a new scheduler future and the result needed to signal it
     ///
@@ -276,16 +276,16 @@ impl<T> SchedulerFuture<T> {
             return result;
         }
 
-        // Synchronise with the queue
+        // Synchronise reading the result with the queue
         // TODO: if future tasks have been queued, this will wait for those as well
-        self.scheduler.sync(&self.queue, || {});
+        let result = self.scheduler.sync(&self.queue, || { self.result.lock().expect("Scheduler future result").result.take() });
 
         // The result should now be available
-        let result = self.result.lock().expect("Scheduler future result").result.take();
         if let Some(result) = result {
             return result;
         } else {
             // The future never completed (or the result has been stolen somewhere else somehow)
+            debug_assert!(false, "Future never completed");
             return Err(oneshot::Canceled);
         }
     }
@@ -387,7 +387,7 @@ impl<T> SchedulerFuture<T> {
     }
 }
 
-impl<T> Drop for SchedulerFuture<T> {
+impl<T: Send> Drop for SchedulerFuture<T> {
     fn drop(&mut self) {
         // Reschedule the queue in the background if we're draining the queue
         if self.draining {
@@ -406,7 +406,7 @@ impl<T> Drop for SchedulerFuture<T> {
     }
 }
 
-impl<T> Future for SchedulerFuture<T> {
+impl<T: Send> Future for SchedulerFuture<T> {
     type Output = Result<T, oneshot::Canceled>;
 
     ///
