@@ -488,7 +488,14 @@ impl Scheduler {
                 QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
                 QueueState::Panicked            => RunAction::Panic,
                 QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
-                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::DrainOnThisThread
+                    } 
+                }
             }
         };
 
@@ -530,7 +537,14 @@ impl Scheduler {
                 QueueState::AwokenWhileRunning  => RunAction::Busy,
                 QueueState::Panicked            => RunAction::Panic,
                 QueueState::Pending             => RunAction::Busy,
-                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::Busy
+                    } 
+                }
             }
         };
 
@@ -572,7 +586,14 @@ impl Scheduler {
                 QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
                 QueueState::Panicked            => RunAction::Panic,
                 QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
-                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::DrainOnThisThread
+                    } 
+                }
             }
         };
 
