@@ -40,7 +40,7 @@ use desync::Desync;
 let number = Desync::new(0);
 ```
 
-It supports two main operations. `async` will schedule a new job for the object that will run
+It supports two main operations. `desync` will schedule a new job for the object that will run
 in a background thread. It's useful for deferring long-running operations and moving updates
 so they can run in parallel.
 
