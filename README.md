@@ -5,17 +5,21 @@
 desync = "0.7"
 ```
 
-Desync is a library for Rust that provides a model of concurrency based around the idea of 
-scheduling operations on data. This is in contrast to the traditional model where operations
-are scheduled on threads with ownership of the data being passed between them.
+Desync is a concurrency library for Rust that protects data by scheduling operations in order
+instead of locking and blocking threads. It provides a simple API that works well with Rust's
+notion of lifetimes, alongside a concurrency model with a dramatically reduced set of moving
+parts.
 
 This approach has several advantages over the traditional method:
 
  * It's simpler: almost the  entire set of thread methods and synchronisation primitives can 
-   be replaced with the two fundamental scheduling functions, `sync()` and `desync()`. 
+   be replaced with the two fundamental scheduling functions, `sync()` and `desync()`.
+ * There's less boilerplate: code is less about starting threads and sending messages and more
+   literally expresses intent.
  * It's easier to reason about: scheduled operations are always performed in the order they're 
    queued so race conditions and similar issues due to out-of-order execution are both much rarer 
    and easier to debug.
+ * Borrowing and asynchronous code can mix much more seamlessly than in other concurrency models.
  * It makes it easier to write highly concurrent code: desync makes moving between performing
    operations synchronously and asynchronously trivial, with no need to deal with adding code to
    start threads or communicate between them.
@@ -65,25 +69,24 @@ long-running operations.
 
 # Working with futures
 
-Desync has support for the `futures` library. The simplest operation is `future()`, which creates
-a future that runs asynchronously on a `Desync` object but - unlike `desync()` can return a result.
-It works like this:
+Desync has support for the `futures` library. The simplest operation is `future_sync()`, which 
+creates a future that runs asynchronously on a `Desync` object but - unlike `desync()` can 
+return a result. It works like this:
 
 ```Rust
-let future_number = number.future(|val| future::ready(*val));
+let future_number = number.future_sync(|val| future::ready(*val).boxed());
 assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 )
 ```
 
-Note that this is the equivalent of just `number.sync(|val| *val)`, so this is mainly useful for
-interacting with other code that's already using futures. The `after()` function is also provided
-for using the results of futures to update the contents of `Desync` data: these all preserve the
-strict order-of-operations semantics, so operations scheduled after an `after` won't start until
-that operation has completed.
+There is also a `future_desync()` operation, which can be used in cases where the thread is
+expected to block. It can be used in the same situations as `future_sync()` but has a `detach()`
+method to leave the task running in the background, or a `sync()` method to wait for the result
+to be computed.
 
-There is also support for streams, via the `pipe_in()` and `pipe()` functions. These work on
-`Arc<Desync<T>>` references and provide a way to process a stream asynchronously. These two
-functions provide a powerful way to process input and also to connect `Desync` objects together
-using message-passing for communication.
+Desync can run streams in the background too, via the `pipe_in()` and `pipe()` functions. These 
+work  on `Arc<Desync<T>>` references and provide a way to process a stream asynchronously. These 
+two functions provide a powerful way to process input and also to connect `Desync` objects 
+together using message-passing for communication.
 
 ```Rust
 let some_object = Arc::new(Desync::new(some_object));
