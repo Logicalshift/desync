@@ -2,17 +2,21 @@
 //! # Desync
 //! 
 //! 
-//! This is a library for Rust that provides a model of concurrency based around the idea of 
-//! scheduling operations on data. This is in contrast to the traditional model where operations
-//! are scheduled on threads with ownership of the data being passed between them.
+//! This is a concurrency library for Rust that protects data by scheduling operations in order
+//! instead of locking and blocking threads. It provides a simple API that works well with Rust's
+//! notion of lifetimes, alongside a concurrency model with a dramatically reduced set of moving
+//! parts.
 //! 
 //! This approach has several advantages over the traditional method:
 //! 
 //!  * It's simpler: almost the  entire set of thread methods and synchronisation primitives can 
-//!    be replaced with the two fundamental scheduling functions, `sync()` and `desync()`. 
+//!    be replaced with the two fundamental scheduling functions, `sync()` and `desync()`.
+//!  * There's less boilerplate: code is less about starting threads and sending messages and more
+//!    literally expresses intent.
 //!  * It's easier to reason about: scheduled operations are always performed in the order they're 
 //!    queued so race conditions and similar issues due to out-of-order execution are both much rarer 
 //!    and easier to debug.
+//!  * Borrowing and asynchronous code can mix much more seamlessly than in other concurrency models.
 //!  * It makes it easier to write highly concurrent code: desync makes moving between performing
 //!    operations synchronously and asynchronously trivial, with no need to deal with adding code to
 //!    start threads or communicate between them.
@@ -69,7 +73,7 @@
 //! to perform operations asynchronously, this provides a useful way to immediately parallelize
 //! long-running operations.
 //! 
-//! The `future()` action returns a boxed Future that can be used with other libraries that use them. It's 
+//! The `future_sync()` action returns a boxed Future that can be used with other libraries that use them. It's 
 //! conceptually the same as `sync`, except that it doesn't wait for the operation to complete:
 //! 
 //! ```
@@ -88,7 +92,7 @@
 //! #     thread::sleep(Duration::from_millis(100));
 //! #     *val = 42;
 //! # });
-//! let future_number = number.future(|val| future::ready(*val).boxed());
+//! let future_number = number.future_sync(|val| future::ready(*val).boxed());
 //! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
 //! ```
@@ -124,5 +128,6 @@ pub mod scheduler;
 pub mod desync;
 pub mod pipe;
 
+pub use self::scheduler::{TrySyncError};
 pub use self::desync::*;
 pub use self::pipe::*;

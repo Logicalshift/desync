@@ -18,7 +18,7 @@ fn schedule_future() {
         use futures::executor;
 
         let queue       = queue();
-        let future      = future(&queue, move || async {
+        let future      = future_sync(&queue, move || async {
             thread::sleep(Duration::from_millis(100));
             42
         });
@@ -41,7 +41,7 @@ fn schedule_future_with_no_scheduler_threads() {
         scheduler.despawn_threads_if_overloaded();
 
         let queue       = queue();
-        let future      = scheduler.future(&queue, move || async {
+        let future      = scheduler.future_sync(&queue, move || async {
             thread::sleep(Duration::from_millis(100));
             42
         });
@@ -66,7 +66,7 @@ fn wake_future_with_no_scheduler_threads() {
 
         // Schedule a future that will block until we send a value
         let queue       = queue();
-        let future      = scheduler.future(&queue, move || async {
+        let future      = scheduler.future_sync(&queue, move || async {
             rx.await.expect("Receive result")
         });
 
@@ -183,6 +183,127 @@ impl ArcWake for TestWaker {
 }
 
 #[test]
+fn wait_for_sync_future_from_desync_future() {
+    use futures::executor;
+
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let sync_future     = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
+            let desync_future   = future_desync(&queue2, move || { async move { sync_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Wait for the desync future in an executor
+            executor::block_on(async move { 
+                desync_future.await.ok();
+            });
+
+            // Run sync on both queues
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 5000);
+}
+
+#[test]
+fn wait_for_sync_future_from_desync_future_without_awaiting() {
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let sync_future     = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
+            let _desync_future  = future_desync(&queue2, move || { async move { sync_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Run sync on both queues (these will schedule after the two futures have completed)
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 500);
+}
+
+#[test]
+fn wait_for_desync_future_from_sync_future() {
+    use futures::executor;
+
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let desync_future   = future_desync(&queue1, move || { async move { recv1.await.ok(); } });
+            let sync_future     = future_sync(&queue2, move || { async move { desync_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Wait for the desync future in an executor
+            executor::block_on(async move { 
+                sync_future.await.ok();
+            });
+
+            // Run sync on both queues
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 5000);
+}
+
+#[test]
+fn wait_for_sync_future_from_sync_future() {
+    use futures::executor;
+
+    timeout(|| {
+        // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
+        for _i in 0..1000 {
+            // We'll schedule a sync future on queue1, and wait for it from a desync future on queue2
+            let queue1      = queue();
+            let queue2      = queue();
+
+            // Oneshot channel to wake the sync queue
+            let (done1, recv1)  = oneshot::channel::<()>();
+
+            let nested_future   = future_sync(&queue1, move || { async move { recv1.await.ok(); } });
+            let desync_future   = future_sync(&queue2, move || { async move { nested_future.await.ok(); } });
+
+            // Signal
+            done1.send(()).unwrap();
+
+            // Wait for the desync future in an executor
+            executor::block_on(async move { 
+                desync_future.await.ok();
+            });
+
+            // Run sync on both queues
+            sync(&queue1, move || { });
+            sync(&queue2, move || { });
+        }
+    }, 5000);
+}
+
+#[test]
 fn poll_two_futures_on_one_queue() {
     // 0 threads so we force the future to act in 'drain' mode
     let scheduler   = Scheduler::new();
@@ -200,11 +321,11 @@ fn poll_two_futures_on_one_queue() {
     let wake2           = Arc::new(TestWaker { awake: Mutex::new(false) });
 
     // Wait for done1 then done2 to signal
-    let mut future_1    = scheduler.future(&queue, move || {
+    let mut future_1    = scheduler.future_sync(&queue, move || {
         async move { recv1.await.ok(); }
     });
 
-    let mut future_2    = scheduler.future(&queue, move || {
+    let mut future_2    = scheduler.future_sync(&queue, move || {
         async move { recv2.await.ok(); }
     });
 
@@ -226,16 +347,17 @@ fn poll_two_futures_on_one_queue() {
     let waker_ref           = task::waker_ref(&wake2);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
+    // Poll the other future: it should be pending as it's waiting to be scheduled
     assert!(future_2.poll_unpin(&mut ctxt) == Poll::Pending);
 
     done2.send(()).unwrap();
 
-    // future_1 should be signalled for polling, future_2 should not
+    // future_1 should be signalled for polling, future_2 should not (as it can't start until future_1 is finished)
     assert!((*wake2.awake.lock().unwrap()) == false);
     assert!((*wake1.awake.lock().unwrap()) == true);
 
     // Retrieve the result for future_1
-    let waker_ref           = task::waker_ref(&wake2);
+    let waker_ref           = task::waker_ref(&wake1);
     let mut ctxt            = task::Context::from_waker(&waker_ref);
 
     assert!(future_1.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));

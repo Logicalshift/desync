@@ -8,13 +8,17 @@ use super::scheduler_thread::*;
 use super::job_queue::*;
 use super::queue_state::*;
 use super::active_queue::*;
+use super::sync_future::*;
 use super::scheduler_future::*;
 use super::queue_resumer::*;
+use super::try_sync_error::*;
 
 use std::fmt;
 use std::sync::*;
 use std::collections::vec_deque::*;
+use std::result::{Result};
 
+use futures::prelude::*;
 use futures::channel::oneshot;
 use futures::future::{Future};
 
@@ -216,9 +220,12 @@ impl Scheduler {
     }
 
     ///
-    /// Schedules a job to run and returns a future for retrieving the result
+    /// Schedules a job to run asynchronously and returns a future for retrieving the result
     ///
-    pub fn future<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
+    /// pool (ie, will run even if the current thread is blocked)
+    ///
+    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
     where   TFn:                'static+Send+FnOnce() -> TFuture,
             TFuture:            'static+Send+Future,
             TFuture::Output:    Send {
@@ -242,6 +249,45 @@ impl Scheduler {
 
         // Receive channel will be notified when the job is completed
         receive
+    }
+
+    ///
+    /// Schedules a job to run and returns a future for retrieving the result
+    ///
+    /// The future will cancel if the return value is discarded, and will run in the current execution context. These futures are
+    /// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
+    /// to use when borrowing values.
+    ///
+    pub fn future_sync<'a, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    where   TFn:                'a+Send+FnOnce() -> TFuture,
+            TFuture:            'a+Send+Future,
+            TFuture::Output:    Send {
+        // Box the job (so it implements Unpin)
+        let job = Box::new(job);
+
+        // We need two channels to signal that the future is ready to run
+        let (queue_ready_send, queue_ready_recv)    = oneshot::channel();
+        let (done_send, done_recv)                  = oneshot::channel();
+
+        // Create the scheduler future
+        let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
+
+        // Create the job to perform on the queue. This signals when the future starts and waits for the job to complete
+        let signal_job = FutureJob::new(move || {
+            async {
+                // Signal that the job should start
+                queue_ready_send.send(()).ok();
+
+                // Wait for the job to complete (if cancelled, the SyncFuture was dropped, which means it's safe to continue)
+                done_recv.await.ok();
+                send.signal(());
+            }
+        });
+
+        self.schedule_job_desync(queue, Box::new(signal_job));
+
+        // The actual job is run by a SyncFuture (we box that so that it also implements Unpin)
+        SyncFuture::new(move || job().boxed(), receive, queue_ready_recv, done_send)
     }
 
     ///
@@ -279,7 +325,7 @@ impl Scheduler {
         let (finished_suspending, notify_finished_suspending) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         // Queue a future (we never await it though)
-        let _future = self.future(queue, move || {
+        self.future_desync(queue, move || {
             // Create a channel for resuming the queue
             let (resume, wait_for_resume)   = oneshot::channel();
 
@@ -291,7 +337,7 @@ impl Scheduler {
 
             // Wait for the queue to resume
             wait_for_resume
-        });
+        }).detach();
 
         // Return the finished_suspending future
         finished_suspending
@@ -442,7 +488,14 @@ impl Scheduler {
                 QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
                 QueueState::Panicked            => RunAction::Panic,
                 QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
-                QueueState::Idle                => { core.state = QueueState::Running; RunAction::Immediate }
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::DrainOnThisThread
+                    } 
+                }
             }
         };
 
@@ -451,6 +504,104 @@ impl Scheduler {
             RunAction::DrainOnThisThread    => self.sync_drain(queue, job),
             RunAction::WaitForBackground    => self.sync_background(queue, job),
             RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
+        }
+    }
+
+    ///
+    /// If the queue is immediately available (in the idle state), runs the specified action, otherwise
+    /// indicates an error.
+    ///
+    /// If the queue is waiting to be scheduled rather than idle, this will also return an error.
+    ///
+    pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, TrySyncError> {
+        enum RunAction {
+            /// The queue is empty: call the function directly and don't bother with storing a result
+            Immediate,
+
+            /// The queue is busy and this call should return an error
+            Busy,
+
+            /// The queue is panicked
+            Panic
+        }
+
+        // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+        let run_action = {
+            let mut core = queue.core.lock().expect("JobQueue core lock");
+
+            match core.state {
+                QueueState::Running             => RunAction::Busy,
+                QueueState::WaitingForWake      => RunAction::Busy,
+                QueueState::WaitingForUnpark    => RunAction::Busy,
+                QueueState::WaitingForPoll(_)   => RunAction::Busy,
+                QueueState::AwokenWhileRunning  => RunAction::Busy,
+                QueueState::Panicked            => RunAction::Panic,
+                QueueState::Pending             => RunAction::Busy,
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::Busy
+                    } 
+                }
+            }
+        };
+
+        match run_action {
+            RunAction::Immediate            => Ok(self.sync_immediate(queue, job)),
+            RunAction::Busy                 => Err(TrySyncError::Busy),
+            RunAction::Panic                => panic!("Cannot schedule new jobs on a panicked queue")
+        }
+    }
+
+    ///
+    /// Schedules a synchronous event to the queue. Returns false if the queue is not panicked, or true if it is,
+    /// but otherwise behaves like sync()
+    ///
+    pub (crate) fn sync_no_panic<TFn: Send+FnOnce() -> ()>(&self, queue: &Arc<JobQueue>, job: TFn) -> bool {
+        enum RunAction {
+            /// The queue is empty: call the function directly and don't bother with storing a result
+            Immediate,
+
+            /// The queue is not empty but not running: drain on this thread so we get to the sync op
+            DrainOnThisThread,
+
+            /// The queue is running in the background
+            WaitForBackground,
+
+            /// The queue is panicked
+            Panic
+        }
+
+        // If the queue is idle when this is called, we need to schedule this task on this thread rather than one owned by the background process
+        let run_action = {
+            let mut core = queue.core.lock().expect("JobQueue core lock");
+
+            match core.state {
+                QueueState::Running             => RunAction::WaitForBackground,
+                QueueState::WaitingForWake      => RunAction::WaitForBackground,
+                QueueState::WaitingForUnpark    => RunAction::WaitForBackground,
+                QueueState::WaitingForPoll(_)   => RunAction::WaitForBackground,
+                QueueState::AwokenWhileRunning  => RunAction::WaitForBackground,
+                QueueState::Panicked            => RunAction::Panic,
+                QueueState::Pending             => { core.state = QueueState::Running; RunAction::DrainOnThisThread },
+                QueueState::Idle                => { 
+                    core.state = QueueState::Running;
+                    if core.queue.len() == 0 {
+                        RunAction::Immediate 
+                    } else {
+                        RunAction::DrainOnThisThread
+                    } 
+                }
+            }
+        };
+
+        match run_action {
+            RunAction::Immediate            => { self.sync_immediate(queue, job); false },
+            RunAction::DrainOnThisThread    => { self.sync_drain(queue, job); false },
+            RunAction::WaitForBackground    => { self.sync_background(queue, job); false },
+            RunAction::Panic                => true
         }
     }
 }
@@ -500,13 +651,30 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 }
 
 ///
-/// Schedules a job to run and returns a future for retrieving the result
+/// Schedules a job to run asynchronously and returns a future for retrieving the result
 ///
-pub fn future<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+/// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
+/// pool (ie, will run even if the current thread is blocked)
+///
+pub fn future_desync<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
 where   TFn:                'static+Send+FnOnce() -> TFuture,
         TFuture:            'static+Send+Future,
         TFuture::Output:    Send {
-    scheduler().future(queue, job)
+    scheduler().future_desync(queue, job)
+}
+
+///
+/// Schedules a job to run and returns a future for retrieving the result
+///
+/// The future will cancel if the return value is discarded, and will run in the current execution context. These futures are
+/// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
+/// to use when borrowing values.
+///
+pub fn future_sync<'a, TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+where   TFn:                'a+Send+FnOnce() -> TFuture,
+        TFuture:            'a+Send+Future,
+        TFuture::Output:    Send {
+    scheduler().future_sync(queue, job)
 }
 
 ///
@@ -514,4 +682,11 @@ where   TFn:                'static+Send+FnOnce() -> TFuture,
 ///
 pub fn sync<Result: Send, TFn: Send+FnOnce() -> Result>(queue: &Arc<JobQueue>, job: TFn) -> Result {
     scheduler().sync(queue, job)
+}
+
+///
+/// Performs an action synchronously on the specified queue 
+///
+pub fn try_sync<FnResult: Send, TFn: Send+FnOnce() -> FnResult>(queue: &Arc<JobQueue>, job: TFn) -> Result<FnResult, TrySyncError> {
+    scheduler().try_sync(queue, job)
 }

@@ -11,6 +11,9 @@ use futures::{FutureExt};
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
+use std::mem;
+use std::result::{Result};
+
 ///
 /// A data storage structure used to govern synchronous and asynchronous access to an underlying object.
 ///
@@ -19,7 +22,8 @@ pub struct Desync<T: Send+Unpin> {
     queue:  Arc<JobQueue>,
 
     /// Data for this object. Boxed so the pointer remains the same through the lifetime of the object.
-    data:   Pin<Box<T>>
+    /// Will be 'None' only briefly when the data has been taken to be dropped
+    data:   Option<Pin<Box<T>>>
 }
 
 // Rust actually derives this anyway at the moment
@@ -49,7 +53,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
 
         Desync {
             queue:  queue,
-            data:   Pin::new(Box::new(data))
+            data:   Some(Pin::new(Box::new(data)))
         }
     }
 
@@ -79,7 +83,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
-        let data = DataRef(&*self.data);
+        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
         desync(&self.queue, move || {
             let data = data.0 as *mut T;
@@ -96,7 +100,8 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     where TFn: Send+FnOnce(&mut T) -> Result, Result: Send {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-            let data = DataRef(&*self.data);
+            // Exclusivity is guaranteed because the queue executes only one task at a time
+            let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
             sync(&self.queue, move || {
                 let data = data.0 as *mut T;
@@ -108,19 +113,82 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     }
 
     ///
+    /// Performs an operation synchronously on this item, 
+    ///
+    pub fn try_sync<TFn, FnResult>(&self, job: TFn) -> Result<FnResult, TrySyncError>
+    where TFn: Send+FnOnce(&mut T) -> FnResult, FnResult: Send {
+        let result = {
+            // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
+            let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+
+            try_sync(&self.queue, move || {
+                let data = data.0 as *mut T;
+                job(unsafe { &mut *data })
+            })
+        };
+
+        result
+    }
+
+    ///
+    /// Deprecated name for `future_desync`
+    ///
+    #[inline]
+    #[deprecated(since="0.7.0", note="please use either `future_desync` or `future_sync` to schedule futures")]
+    pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
+            TOutput:    'static+Send {
+        self.future_desync(job)
+    }
+
+    ///
     /// Performs an operation asynchronously on the contents of this item, returning the 
     /// result via a future.
+    ///
+    /// The future will be scheduled in the background, so it will make progress even if the current scheduler is
+    /// blocked for any reason. Additionally, it's not necessary to await the returned future, which can be discarded
+    /// if necessary.
     /// 
     /// The future returned is a `BoxFuture`, which you can create using `.boxed()` or `Box::pin()` on a future. This is 
     /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
     /// from for<'a> into the return type of a function)
     ///
-    pub fn future<TFn, TOutput>(&self, job: TFn) -> impl Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    pub fn future_desync<TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
     where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
             TOutput:    'static+Send {
-        let data = DataRef(&*self.data);
+        // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
+        // because queues only execute one task at a time
+        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
-        scheduler().future(&self.queue, move || {
+        scheduler().future_desync(&self.queue, move || {
+            let data        = data.0 as *mut T;
+            let job         = job(unsafe { &mut *data });
+
+            async {
+                job.await
+            }
+        })
+    }
+
+    ///
+    /// Performs an operation asynchronously on the contents of this item, returning a future that must be awaited
+    /// before it is dropped.
+    ///
+    /// The future will be scheduled in the current execution context, so it will only make progress if the current
+    /// scheduler is running. The task will be cancelled and will not complete execution if the future is dropped before
+    /// completion, so it's usually necessary to await the result of this function for the task to behave correctly.
+    /// 
+    /// The future returned is a `BoxFuture`, which you can create using `.boxed()` or `Box::pin()` on a future. This is 
+    /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
+    /// from for<'a> into the return type of a function)
+    ///
+    pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    where   TFn:        'a+Send+for<'b> FnOnce(&'b mut T) -> BoxFuture<'b, TOutput>,
+            TOutput:    'a+Send {
+        // The future will have a lifetime shorter than the lifetime of this structure
+        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+
+        scheduler().future_sync(&self.queue, move || {
             let data        = data.0 as *mut T;
             let job         = job(unsafe { &mut *data });
 
@@ -136,7 +204,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     ///
     pub fn after<'a, TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
     where TFn: 'static+Send+FnOnce(&mut T, Fut::Output) -> Res {
-        self.future(move |data| {
+        self.future_desync(move |data| {
             async move {
                 let future_result = after.await;
                 job(data, future_result)
@@ -147,9 +215,24 @@ impl<T: 'static+Send+Unpin> Desync<T> {
 
 impl<T: Send+Unpin> Drop for Desync<T> {
     fn drop(&mut self) {
+        use std::thread;
+
+        // Take the data we're about to drop from the object
+        let data = self.data.take();
+
         // Ensure that everything on the queue has committed by queueing a last synchronous event
         // (Not synchronising the queue would make this unsafe as we would hold on to a pointer to
         // the internal data structure)
-        sync(&self.queue, || {});
+        if thread::panicking() {
+            // If the thread is already panicking when we're dropped, do not panic again
+            scheduler().sync_no_panic(&self.queue, move || {
+                mem::drop(data);
+            });
+        } else {
+            // Thread is not panicking
+            sync(&self.queue, move || {
+                mem::drop(data);
+            });
+        }
     }
 }

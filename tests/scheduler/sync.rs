@@ -102,3 +102,78 @@ fn sync_drains_with_no_threads() {
         assert!(new_val == 42);
     }, 500);
 }
+
+#[test]
+fn try_sync_succeeds_on_idle_queue() {
+    timeout(|| {
+        let scheduler       = Scheduler::new();
+        let val             = Arc::new(Mutex::new(0));
+        let queue           = queue();
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result     = scheduler.try_sync(&queue, || {
+            (*val.lock().unwrap()) = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!((*val.lock().unwrap()) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_succeeds_on_idle_queue_after_async_job() {
+    timeout(|| {
+        let scheduler       = Scheduler::new();
+        let val             = Arc::new(Mutex::new(0));
+        let queue           = queue();
+
+        // Schedule something asynchronously and wait for it to complete
+        scheduler.desync(&queue, || thread::sleep(Duration::from_millis(50)));
+        scheduler.sync(&queue, || { });
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result     = scheduler.try_sync(&queue, || {
+            (*val.lock().unwrap()) = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!((*val.lock().unwrap()) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_fails_on_busy_queue() {
+    timeout(|| {
+        let scheduler       = Scheduler::new();
+        let val             = Arc::new(Mutex::new(0));
+        let queue           = queue();
+
+        // Schedule on the queue and block it
+        let (tx, rx)    = channel();
+
+        scheduler.desync(&queue, move || { rx.recv().ok(); });
+
+        // Queue is busy, so try_sync should fail
+        let sync_result     = scheduler.try_sync(&queue, || {
+            (*val.lock().unwrap()) = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result.is_err());
+
+        // Double-check that the value was not updated
+        assert!((*val.lock().unwrap()) == 0);
+
+        // Unblock the queue
+        tx.send(1).ok();
+    }, 500);
+}

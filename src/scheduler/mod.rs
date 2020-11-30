@@ -49,6 +49,7 @@ mod desync_scheduler;
 mod core;
 mod job;
 mod future_job;
+mod sync_future;
 mod unsafe_job;
 mod scheduler_thread;
 mod job_queue;
@@ -58,7 +59,10 @@ mod wake_queue;
 mod wake_thread;
 mod scheduler_future;
 mod queue_resumer;
+mod try_sync_error;
 
 pub use self::desync_scheduler::*;
 pub use self::job_queue::{JobQueue};
 pub use self::queue_resumer::{QueueResumer};
+pub use self::try_sync_error::{TrySyncError};
+pub use self::scheduler_future::{SchedulerFuture};

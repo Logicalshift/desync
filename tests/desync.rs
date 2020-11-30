@@ -78,7 +78,7 @@ fn update_data_with_future() {
         });
 
         executor::block_on(async {
-            let future = desynced.future(|data| { Box::pin(future::ready(data.val)) });
+            let future = desynced.future_desync(|data| { Box::pin(future::ready(data.val)) });
             assert!(future.await.unwrap() == 42);
         });
     }, 500);
@@ -101,7 +101,51 @@ fn update_data_with_future_1000_times() {
             });
 
             executor::block_on(async {
-                let future = desynced.future(|data| Box::pin(future::ready(data.val)));
+                let future = desynced.future_desync(|data| Box::pin(future::ready(data.val)));
+                
+                assert!(future.await.unwrap() == 43);
+            });
+        }, 500);
+    }
+}
+
+#[test]
+fn update_data_with_future_sync() {
+    timeout(|| {
+        use futures::executor;
+
+        let desynced = Desync::new(TestData { val: 0 });
+
+        desynced.desync(|data| {
+            sleep(Duration::from_millis(100));
+            data.val = 42;
+        });
+
+        executor::block_on(async {
+            let future = desynced.future_sync(|data| { Box::pin(future::ready(data.val)) });
+            assert!(future.await.unwrap() == 42);
+        });
+    }, 500);
+}
+
+#[test]
+fn update_data_with_future_sync_1000_times() {
+    // Seems to timeout fairly reliably after signalling the future
+    use futures::executor;
+
+    for _i in 0..1000 {
+        timeout(|| {
+            let desynced = Desync::new(TestData { val: 0 });
+
+            desynced.desync(|data| {
+                data.val = 42;
+            });
+            desynced.desync(|data| {
+                data.val = 43;
+            });
+
+            executor::block_on(async {
+                let future = desynced.future_sync(|data| Box::pin(future::ready(data.val)));
                 
                 assert!(future.await.unwrap() == 43);
             });
@@ -189,9 +233,9 @@ fn future_and_sync() {
     let sync_request    = Desync::new(None);
 
     // Send a request to the 'core' via the sync reqeust and store the result
-    let _ = sync_request.future(move |data| {
+    let _ = sync_request.future_desync(move |data| {
         async move {
-            let result = core.future(move |_core| {
+            let result = core.future_desync(move |_core| {
                 async move {
                     Some(recv.await.unwrap())
                 }.boxed()
@@ -229,43 +273,115 @@ fn double_future_and_sync() {
     let initiator_3 = Desync::new(None);
 
     let core_1      = Arc::clone(&core);
-    let _           = initiator_1.future(move |val| {
+    initiator_1.future_desync(move |val| {
         async move {
             // Wait for a task on the core
-            *val = core_1.future(move |_| {
+            *val = core_1.future_desync(move |_| {
                 async move { thread::sleep(Duration::from_millis(400)); Some(1) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     let core_2      = Arc::clone(&core);
-    let _           = initiator_2.future(move |val| {
+    initiator_2.future_desync(move |val| {
         async move {
             // Wait for the original initiator to start its future
             thread::sleep(Duration::from_millis(100));
 
             // Wait for a task on the core
-            *val = core_2.future(move |_| {
+            *val = core_2.future_desync(move |_| {
                 async move { thread::sleep(Duration::from_millis(200)); Some(2) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     let core_3      = Arc::clone(&core);
-    let _           = initiator_3.future(move |val| {
+    initiator_3.future_desync(move |val| {
         async move {
             // Wait for the original initiator to start its future
             thread::sleep(Duration::from_millis(200));
 
             // Wait for a task on the core
-            *val = core_3.future(move |_| {
+            *val = core_3.future_desync(move |_| {
                 async move { thread::sleep(Duration::from_millis(200)); Some(3) }.boxed()
             }).await.unwrap();
         }.boxed()
-    });
+    }).detach();
 
     // Wait for the result from the futures synchronously
     assert!(initiator_3.sync(|val| { *val }) == Some(3));
     assert!(initiator_2.sync(|val| { *val }) == Some(2));
     assert!(initiator_1.sync(|val| { *val }) == Some(1));
+}
+
+#[test]
+fn try_sync_succeeds_on_idle_queue() {
+    timeout(|| {
+        let core        = Desync::new(0);
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result = core.try_sync(|val| {
+            *val = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!(core.sync(|val| *val) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_succeeds_on_idle_queue_after_async_job() {
+    timeout(|| {
+        use std::thread;
+        let core        = Desync::new(0);
+
+        // Schedule something asynchronously and wait for it to complete
+        core.desync(|_val| thread::sleep(Duration::from_millis(50)));
+        core.sync(|_val| { });
+
+        // Queue is doing nothing, so try_sync should succeed
+        let sync_result = core.try_sync(|val| {
+            *val= 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result == Ok(1));
+
+        // Double-check that the value was updated
+        assert!(core.sync(|val| *val) == 42);
+    }, 500);
+}
+
+#[test]
+fn try_sync_fails_on_busy_queue() {
+    timeout(|| {
+        use std::sync::mpsc::*;
+        
+        let core        = Desync::new(0);
+
+        // Schedule on the queue and block it
+        let (tx, rx)    = channel();
+
+        core.desync(move |_val| { rx.recv().ok(); });
+
+        // Queue is busy, so try_sync should fail
+        let sync_result = core.try_sync(|val| {
+            *val = 42;
+            1
+        });
+
+        // Queue is idle, so we should receive a result
+        assert!(sync_result.is_err());
+
+        // Unblock the queue
+        tx.send(1).ok();
+
+        // Double-check that the value was not updated
+        assert!((core.sync(|val| *val)) == 0);
+    }, 500);
 }
