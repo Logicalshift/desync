@@ -105,6 +105,21 @@ impl task::ArcWake for DrainWaker {
 }
 
 ///
+/// Waker that wakes up two different wakers at once
+///
+struct DoubleWaker(Mutex<Option<(task::Waker, task::Waker)>>);
+
+impl task::ArcWake for DoubleWaker {
+    fn wake_by_ref(arc_self: &Arc<Self>) {
+        let to_wake = arc_self.0.lock().unwrap().take();
+        if let Some((waker1, waker2)) = to_wake {
+            waker1.wake();
+            waker2.wake();
+        }
+    }
+}
+
+///
 /// Signalling structure used to return the result of a scheduler future
 ///
 struct SchedulerFutureResult<T> {
@@ -349,8 +364,16 @@ impl<T: Send> SchedulerFuture<T> {
                             // Wait for the next poll
                             self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll(self.id);
 
-                            // Use the context waker
-                            waker.wake_with(context.waker().clone());
+                            // Wake both the queue and the context
+                            let context_waker   = context.waker().clone();
+                            let queue_waker     = WakeQueue(Arc::clone(&self.queue), Arc::clone(&self.scheduler.core));
+                            let queue_waker     = Arc::new(queue_waker);
+                            let queue_waker     = task::waker(queue_waker);
+
+                            let wake_both       = DoubleWaker(Mutex::new(Some((queue_waker, context_waker))));
+                            let wake_both       = task::waker(Arc::new(wake_both));
+
+                            waker.wake_with(wake_both);
 
                             // Result is pending
                             self.draining = true;
