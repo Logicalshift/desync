@@ -412,6 +412,7 @@ impl<T: Send> SchedulerFuture<T> {
 
 impl<T: Send> Drop for SchedulerFuture<T> {
     fn drop(&mut self) {
+        /* -- no need to reschedule manually any more, the queue will wake itself up
         // Reschedule the queue in the background if we're draining the queue
         if self.draining {
             {
@@ -426,6 +427,7 @@ impl<T: Send> Drop for SchedulerFuture<T> {
             // Reschedule the queue
             self.scheduler.core.reschedule_queue(&self.queue, Arc::clone(&self.scheduler.core));
         }
+        */
     }
 }
 

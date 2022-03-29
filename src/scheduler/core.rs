@@ -63,19 +63,29 @@ impl SchedulerCore {
         let reschedule = {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
-            if core.state == QueueState::Idle {
-                // Schedule a thread to restart the queue if more things were queued
-                if core.queue.len() > 0 {
-                    // Need to schedule the queue after this event
-                    core.state = QueueState::Pending;
+            match core.state {
+                QueueState::Idle => {
+                    // Schedule a thread to restart the queue if more things were queued
+                    if core.queue.len() > 0 {
+                        // Need to schedule the queue after this event
+                        core.state = QueueState::Pending;
+                        true
+                    } else {
+                        // Queue is empty and can go back to idle
+                        core.state = QueueState::Idle;
+                        false
+                    }
+                },
+
+                QueueState::WaitingForPoll(_) => {
+                    // If the target thread gets stuck and stops draining the queue, race it to reschedule it on one of our threads if we can
                     true
-                } else {
-                    // Queue is empty and can go back to idle
-                    core.state = QueueState::Idle;
+                },
+
+                _ => {
+                    // Not scheduled
                     false
                 }
-            } else {
-                false
             }
         };
 
@@ -97,10 +107,17 @@ impl SchedulerCore {
         while let Some(q) = schedule.pop_front() {
             let mut core = q.core.lock().expect("JobQueue core lock");
 
-            if core.state == QueueState::Pending {
-                // Queue is ready to run. Mark it as running and return it
-                core.state = QueueState::Running;
-                return Some(q.clone());
+            match core.state {
+                QueueState::Pending |
+                QueueState::WaitingForPoll(_) => {
+                    // Queue is ready to run. Mark it as running and return it
+                    core.state = QueueState::Running;
+                    return Some(q.clone());
+                }
+
+                _ => { 
+                    // Move to the next queue in the schedule
+                }
             }
         }
 
