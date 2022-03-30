@@ -471,10 +471,8 @@ impl<T: Send> Future for SchedulerFuture<T> {
                     }
                 };
 
-                if let SchedulerAction::WaitForCompletion = run_action {
-                    // Wake us up when the future is available
-                    future_result.waker = Some(context.waker().clone());
-                }
+                // Wake up the calling context when the result becomes available
+                future_result.waker = Some(context.waker().clone());
 
                 run_action
             }
