@@ -184,10 +184,11 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
     /// from for<'a> into the return type of a function)
     ///
-    pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TOutput, oneshot::Canceled>>+Send
+    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
     where
-        TFn:        'a + Send + for<'b> FnOnce(&'b mut T) -> BoxFuture<'a, TOutput>,
-        TOutput:    'a + Send,
+        TFn:                'a + Send + FnOnce(&'b mut T) -> TFuture,
+        TFuture:            'a + 'b + Send + Future,
+        TFuture::Output:    'a + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
