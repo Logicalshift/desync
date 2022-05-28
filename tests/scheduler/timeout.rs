@@ -11,7 +11,7 @@ pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
         Ok,
         Timeout,
         Panic
-    };
+    }
 
     let (tx, rx)    = channel();
     let (tx1, tx2)  = (tx.clone(), tx.clone());
