@@ -154,8 +154,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// from for<'a> into the return type of a function)
     ///
     pub fn future_desync<TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
-    where   TFn:        'static+Send+for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
-            TOutput:    'static+Send {
+    where
+        TFn:        'static + Send + for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
+        TOutput:    'static + Send,
+    {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
         // because queues only execute one task at a time
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
@@ -183,8 +185,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// from for<'a> into the return type of a function)
     ///
     pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TOutput, oneshot::Canceled>>+Send
-    where   TFn:        'a+Send+for<'b> FnOnce(&'b mut T) -> BoxFuture<'a, TOutput>,
-            TOutput:    'a+Send {
+    where
+        TFn:        'a + Send + for<'b> FnOnce(&'b mut T) -> BoxFuture<'a, TOutput>,
+        TOutput:    'a + Send,
+    {
         // The future will have a lifetime shorter than the lifetime of this structure
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
 
