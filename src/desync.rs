@@ -153,10 +153,11 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
     /// from for<'a> into the return type of a function)
     ///
-    pub fn future_desync<TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
+    pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
-        TFn:        'static + Send + for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, TOutput>,
-        TOutput:    'static + Send,
+        TFn:                'static + Send + FnOnce(&'a mut T) -> TFuture,
+        TFuture:            'static + 'a + Send + Future,
+        TFuture::Output:    'static + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
         // because queues only execute one task at a time
@@ -184,7 +185,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
     /// from for<'a> into the return type of a function)
     ///
-    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
     where
         TFn:                'a + Send + FnOnce(&'b mut T) -> TFuture,
         TFuture:            'a + 'b + Send + Future,
@@ -207,8 +208,12 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// After the pending operations for this item are performed, waits for the
     /// supplied future to complete and then calls the specified function
     ///
-    pub fn after<'a, TFn, Res: 'static+Send, Fut: 'static+Future+Send>(&self, after: Fut, job: TFn) -> impl 'static+Future<Output=Result<Res, oneshot::Canceled>>+Send 
-    where TFn: 'static+Send+FnOnce(&mut T, Fut::Output) -> Res {
+    pub fn after<'a, TFn, Res, Fut>(&self, after: Fut, job: TFn) -> impl 'static + Future<Output=Result<Res, oneshot::Canceled>> + Send 
+    where 
+        Res: 'static + Send,
+        Fut: 'static + Future + Send,
+        TFn: 'static + Send + FnOnce(&mut T, Fut::Output) -> Res 
+    {
         self.future_desync(move |data| {
             async move {
                 let future_result = after.await;
