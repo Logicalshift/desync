@@ -225,17 +225,19 @@ impl Scheduler {
     /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
     /// pool (ie, will run even if the current thread is blocked)
     ///
-    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
-    where   TFn:                'static+Send+FnOnce() -> TFuture,
-            TFuture:            'static+Send+Future,
-            TFuture::Output:    Send {
+    pub fn future_desync<'a, TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
+    where
+        TFn:                'static + Send + FnOnce() -> TFuture,
+        TFuture:            'a + Send + Future,
+        TFuture::Output:    'static + Send 
+    {
         let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
 
         let perform_job = FutureJob::new(move || {
-            // Create the job when we're queued up
-            let job = job();
-
             async {
+                // Create the job when we're queued up
+                let job = job();
+
                 // Run the future
                 let val = job.await;
 

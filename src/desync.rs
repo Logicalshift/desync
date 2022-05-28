@@ -156,7 +156,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
         TFn:                'static + Send + FnOnce(&'a mut T) -> TFuture,
-        TFuture:            'static + 'a + Send + Future,
+        TFuture:            'a + Send + Future,
         TFuture::Output:    'static + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
