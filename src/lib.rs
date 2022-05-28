@@ -92,7 +92,7 @@
 //! #     thread::sleep(Duration::from_millis(100));
 //! #     *val = 42;
 //! # });
-//! let future_number = number.future_sync(|val| future::ready(*val).boxed());
+//! let future_number = number.future_sync(|val| future::ready(*val));
 //! assert!(executor::block_on(async { future_number.await.unwrap() }) == 42 );
 //! # }
 //! ```

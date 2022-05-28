@@ -7,7 +7,6 @@ use super::scheduler::*;
 use std::pin::{Pin};
 use std::sync::{Arc};
 use std::marker::{Unpin};
-use futures::{FutureExt};
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
@@ -148,10 +147,6 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// The future will be scheduled in the background, so it will make progress even if the current scheduler is
     /// blocked for any reason. Additionally, it's not necessary to await the returned future, which can be discarded
     /// if necessary.
-    /// 
-    /// The future returned is a `BoxFuture`, which you can create using `.boxed()` or `Box::pin()` on a future. This is 
-    /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
-    /// from for<'a> into the return type of a function)
     ///
     pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
@@ -180,10 +175,6 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// The future will be scheduled in the current execution context, so it will only make progress if the current
     /// scheduler is running. The task will be cancelled and will not complete execution if the future is dropped before
     /// completion, so it's usually necessary to await the result of this function for the task to behave correctly.
-    /// 
-    /// The future returned is a `BoxFuture`, which you can create using `.boxed()` or `Box::pin()` on a future. This is 
-    /// solely to work around a limitation in Rust's type system (it's not presently possible to introduce the lifetime 
-    /// from for<'a> into the return type of a function)
     ///
     pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
     where
@@ -219,7 +210,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
             async move {
                 let future_result = after.await;
                 job(data, future_result)
-            }.boxed()
+            }
         })
     }
 }

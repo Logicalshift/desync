@@ -6,7 +6,6 @@ use desync::Desync;
 mod scheduler;
 use self::scheduler::timeout::*;
 
-use futures::prelude::*;
 use futures::future;
 
 use std::sync::*;
@@ -219,7 +218,6 @@ fn future_and_sync() {
     sleep(Duration::from_millis(1000));
 
     use std::thread;
-    use futures::prelude::*;
     use futures::channel::oneshot;
 
     // The idea here is we perform an action with a future() and read the result back with a sync() (which is a way you can mix-and-match
@@ -238,7 +236,7 @@ fn future_and_sync() {
             let result = core.future_desync(move |_core| {
                 async move {
                     Some(recv.await.unwrap())
-                }.boxed()
+                }
             }).await;
 
             *data = result.unwrap();
@@ -277,7 +275,7 @@ fn double_future_and_sync() {
         async move {
             // Wait for a task on the core
             *val = core_1.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(400)); Some(1) }.boxed()
+                async move { thread::sleep(Duration::from_millis(400)); Some(1) }
             }).await.unwrap();
         }
     }).detach();
@@ -290,7 +288,7 @@ fn double_future_and_sync() {
 
             // Wait for a task on the core
             *val = core_2.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(200)); Some(2) }.boxed()
+                async move { thread::sleep(Duration::from_millis(200)); Some(2) }
             }).await.unwrap();
         }
     }).detach();
@@ -303,7 +301,7 @@ fn double_future_and_sync() {
 
             // Wait for a task on the core
             *val = core_3.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(200)); Some(3) }.boxed()
+                async move { thread::sleep(Duration::from_millis(200)); Some(3) }
             }).await.unwrap();
         }
     }).detach();
