@@ -188,8 +188,9 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
     where
         TFn:                'a + Send + FnOnce(&'b mut T) -> TFuture,
-        TFuture:            'a + 'b + Send + Future,
+        TFuture:            'b + Send + Future,
         TFuture::Output:    'a + Send,
+        'b:                 'a,
     {
         // The future will have a lifetime shorter than the lifetime of this structure
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());

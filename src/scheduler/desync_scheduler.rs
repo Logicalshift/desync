@@ -260,10 +260,13 @@ impl Scheduler {
     /// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
     /// to use when borrowing values.
     ///
-    pub fn future_sync<'a, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a+Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
-    where   TFn:                'a+Send+FnOnce() -> TFuture,
-            TFuture:            'a+Send+Future,
-            TFuture::Output:    Send {
+    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    where
+        TFn:                'a + Send + FnOnce() -> TFuture,
+        TFuture:            'b + Send + Future,
+        TFuture::Output:    Send,
+        'b:                 'a,
+    {
         // Box the job (so it implements Unpin)
         let job = Box::new(job);
 
