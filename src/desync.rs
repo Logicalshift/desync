@@ -183,7 +183,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// from for<'a> into the return type of a function)
     ///
     pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a+Future<Output=Result<TOutput, oneshot::Canceled>>+Send
-    where   TFn:        'a+Send+for<'b> FnOnce(&'b mut T) -> BoxFuture<'b, TOutput>,
+    where   TFn:        'a+Send+for<'b> FnOnce(&'b mut T) -> BoxFuture<'a, TOutput>,
             TOutput:    'a+Send {
         // The future will have a lifetime shorter than the lifetime of this structure
         let data = DataRef::<T>(&**self.data.as_ref().unwrap());
