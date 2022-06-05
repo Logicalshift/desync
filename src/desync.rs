@@ -148,6 +148,15 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// blocked for any reason. Additionally, it's not necessary to await the returned future, which can be discarded
     /// if necessary.
     ///
+    /// Call `detach()` on the returned future to fully put it in the background. If awaited the scheduler may try to
+    /// 'steal' runtime on the current thread to complete the future, but it will also run the future in the background
+    /// if the current thread is not available or a background thread is available faster. The future here has static
+    /// lifetime so can be passed around in case something needs to monitor when it completes.
+    ///
+    /// Note that this has a companion function, `future_sync()` which is more useful for cases where the future is
+    /// awaited, as the 'inner' future is able to borrow values from the 'outer' future due to the shorter lifetime
+    /// of the returned value.
+    ///
     pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
         TFn:                'static + Send + FnOnce(&'a mut T) -> TFuture,
@@ -175,6 +184,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// The future will be scheduled in the current execution context, so it will only make progress if the current
     /// scheduler is running. The task will be cancelled and will not complete execution if the future is dropped before
     /// completion, so it's usually necessary to await the result of this function for the task to behave correctly.
+    ///
+    /// This is most useful for 'foreground' futures: note that the future can safely borrow values from the outer context
+    /// to use while it's running (in much the same way `sync()` can in synchronous contexts). The need to dispatch to
+    /// the awaiting context can make this future slightly slower than `future_desync()`
     ///
     pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
     where
