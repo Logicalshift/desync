@@ -146,16 +146,24 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     ///
     /// The future will be scheduled in the background, so it will make progress even if the current scheduler is
     /// blocked for any reason. Additionally, it's not necessary to await the returned future, which can be discarded
-    /// if necessary.
+    /// if necessary. As soon as this function returns, the order of the operations in the future are fixed: that is,
+    /// any other operation queued on the same `Desync` will be performed after the future completes.
     ///
     /// Call `detach()` on the returned future to fully put it in the background. If awaited the scheduler may try to
     /// 'steal' runtime on the current thread to complete the future, but it will also run the future in the background
     /// if the current thread is not available or a background thread is available faster. The future here has static
     /// lifetime so can be passed around in case something needs to monitor when it completes.
     ///
+    /// This can also be used to run the future synchronously on the current thread, useful for cases where an async
+    /// function needs to be called from a non-async context. Call `sync()` on the returned future to wait for its
+    /// result synchronously.
+    ///
     /// Note that this has a companion function, `future_sync()` which is more useful for cases where the future is
     /// awaited, as the 'inner' future is able to borrow values from the 'outer' future due to the shorter lifetime
     /// of the returned value.
+    ///
+    /// The normal `sync()` and `desync()` methods will schedule their operations in order around any `future_sync()`
+    /// or `future_desync()` calls, so it's possible to easily mix async and traditional threaded code in one program.
     ///
     pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
@@ -188,6 +196,13 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     /// This is most useful for 'foreground' futures: note that the future can safely borrow values from the outer context
     /// to use while it's running (in much the same way `sync()` can in synchronous contexts). The need to dispatch to
     /// the awaiting context can make this future slightly slower than `future_desync()`
+    ///
+    /// Desync has a feature that makes it possible to wait synchronously for futures to complete: slightly 
+    /// counter-intuitively this is found in the future returned by `future_desync()` function rather than this function,
+    /// which is synchronous with the current async context instead of with the current thread.
+    ///
+    /// The normal `sync()` and `desync()` methods will schedule their operations in order around any `future_sync()`
+    /// or `future_desync()` calls, so it's possible to easily mix async and traditional threaded code in one program.
     ///
     pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
     where
