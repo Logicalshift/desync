@@ -5,27 +5,31 @@
 desync = "0.8"
 ```
 
-Desync is a concurrency library for Rust that protects data by scheduling operations in order
-instead of locking and blocking threads. It provides a simple API that works well with Rust's
-notion of lifetimes, alongside a concurrency model with a dramatically reduced set of moving
-parts.
+Desync provides a new synchronisation type, `Desync<T>`, which works by ordering operations on
+its enclosed data type instead of the traditional method of using mutexes to protect critical
+sections. This allows concurrency to be built around two basic operations:
 
-This approach has several advantages over the traditional method:
+ * `desync_thing.sync(|thing| /* ... */)` for synchronous access to the data
+ * `desync_thing.desync(|thing| /* ... */)` for asynchronous access to the data - running the supplied task in the background.
 
- * It's simpler: almost the  entire set of thread methods and synchronisation primitives can 
-   be replaced with the two fundamental scheduling functions, `sync()` and `desync()`.
- * There's less boilerplate: code is less about starting threads and sending messages and more
-   literally expresses intent.
- * It's easier to reason about: scheduled operations are always performed in the order they're 
-   queued so race conditions and similar issues due to out-of-order execution are both much rarer 
-   and easier to debug.
- * Borrowing and asynchronous code can mix much more seamlessly than in other concurrency models.
- * It makes it easier to write highly concurrent code: desync makes moving between performing
-   operations synchronously and asynchronously trivial, with no need to deal with adding code to
-   start threads or communicate between them.
+If only the `sync()` operation is used, this is roughly equivalent to a standard `Mutex`, except
+with much stronger guarantees about which thread gets the data first. The other operation,
+`desync()` effectively replaces the need to spawn threads and move data around in order to 
+add concurrency to a program.
 
-In addition to the two fundamental methods, desync provides methods for generating futures and
-processing streams.
+Desync also provides equivalent methods for async code: `future_sync()` will perform an operation
+in the current async context and `future_desync()` will schedule an operation in the background.
+These can be freely mixed with the `sync()` and `desync()` operations so it becomes fairly easy to
+mix code using traditional threading and code using async futures. As Desync uses order-of-operations
+to guarantee exclusive access to the data, these operations can borrow the contained data across any
+`await`s that might be needed, unlike locks created using the `Mutex` type, which can't be sent
+between threads.
+
+Desync provides fairly strong ordering guarantees: in particular, when any of the methods return,
+the ordering of the operation is guaranteed relative to any following operation. This property makes
+desync code quite easy to follow and less prone to race conditions than traditional threading. The
+ability to easily schedule updates asynchronously provides a way around common scenarios where the
+need to lock multiple mutexes can create deadlocks.
 
 # Quick start
 
