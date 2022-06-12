@@ -111,7 +111,7 @@ where   Core:   'static+Send+Unpin,
                     // Pass in to the poll function
                     let future_poll = {
                         let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
-                        let future_poll     = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
+                        let future_poll         = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
                         future_poll
                     };
 
