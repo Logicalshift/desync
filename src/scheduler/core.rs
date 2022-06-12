@@ -136,42 +136,43 @@ impl SchedulerCore {
 
         // Find the first thread that is not marked as busy and schedule this task on it
         for &(ref busy_rc, ref thread) in threads.iter() {
-            let mut busy = busy_rc.lock().expect("Thread busy lock");
+            if let Ok(mut busy) = busy_rc.try_lock() {
+                // If the busy lock is held, then we consider the thread to be busy
+                if !*busy {
+                    // Clone the busy mutex so we can return this thread to readiness
+                    let also_busy =  busy_rc.clone();
 
-            if !*busy {
-                // Clone the busy mutex so we can return this thread to readiness
-                let also_busy =  busy_rc.clone();
+                    // This thread is busy
+                    *busy = true;
+                    thread.run(move || {
+                        let mut done = false;
 
-                // This thread is busy
-                *busy = true;
-                thread.run(move || {
-                    let mut done = false;
+                        while !done {
+                            // Obtain the next job. The thread is not busy once there are no longer any jobs
+                            // We hold the mutex while this is going on to avoid a race condition when a thread is going dormant
+                            let job_data = {
+                                let mut busy = also_busy.lock().expect("Thread busy lock");
+                                let job_data = next_job();
 
-                    while !done {
-                        // Obtain the next job. The thread is not busy once there are no longer any jobs
-                        // We hold the mutex while this is going on to avoid a race condition when a thread is going dormant
-                        let job_data = {
-                            let mut busy = also_busy.lock().expect("Thread busy lock");
-                            let job_data = next_job();
+                                // If there's no next job, then this thread is no longer busy
+                                if job_data.is_none() {
+                                    *busy = false;
+                                }
 
-                            // If there's no next job, then this thread is no longer busy
-                            if job_data.is_none() {
-                                *busy = false;
+                                job_data
+                            };
+
+                            // Run the job if there is one, stop the thread if there is not
+                            if let Some(job_data) = job_data {
+                                job(job_data);
+                            } else {
+                                done = true;
                             }
-
-                            job_data
-                        };
-
-                        // Run the job if there is one, stop the thread if there is not
-                        if let Some(job_data) = job_data {
-                            job(job_data);
-                        } else {
-                            done = true;
                         }
-                    }
-                });
+                    });
 
-                return true;
+                    return true;
+                }
             }
         }
 
