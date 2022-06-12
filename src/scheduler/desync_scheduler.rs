@@ -14,6 +14,7 @@ use super::queue_resumer::*;
 use super::try_sync_error::*;
 
 use std::fmt;
+use std::mem;
 use std::sync::*;
 use std::collections::vec_deque::*;
 use std::result::{Result};
@@ -423,12 +424,14 @@ impl Scheduler {
     ///
     fn sync_background<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         // Queue a job that unparks this thread when done
-        let pair    = Arc::new((Mutex::new(None), Condvar::new()));
-        let pair2   = pair.clone();
+        let wakeup  = Arc::new(Condvar::new());
+        let result  = Arc::new(Mutex::new(None));
+
+        let pair2   = (wakeup.clone(), result.clone());
 
         // Safe job that signals the condvar when needed
         let job     = Box::new(Job::new(move || {
-            let &(ref result, ref cvar) = &*pair2;
+            let (cvar, result) = pair2;
 
             // Run the job
             let actual_result = job();
@@ -437,6 +440,9 @@ impl Scheduler {
             *result.lock().expect("Background job result lock") = Some(actual_result);
             cvar.notify_one();
         }));
+
+        // Add our condition variable to the list of wakers scheduled for the queue
+        queue.core.lock().unwrap().wake_blocked.push(Arc::downgrade(&wakeup));
         
         // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
         let need_reschedule = {
@@ -450,16 +456,35 @@ impl Scheduler {
         if need_reschedule { self.reschedule_queue(queue); }
 
         // Wait for the result to arrive (and the sweet relief of no more unsafe job)
-        let &(ref lock, ref cvar) = &*pair;
-        let mut result = lock.lock().expect("Background job result lock");
-        
-        while result.is_none() {
-            result = cvar.wait(result).expect("Background job cvar wait");
-        }
+        let final_result = {
+            let result_mutex    = result;
+            let mut result      = result_mutex.lock().expect("Background job result lock");
+            
+            while result.is_none() {
+                // Use the condition variable to wait for the wakeup
+                result = wakeup.wait(result).expect("Background job cvar wait");
 
-        // Get the final result by swapping it out of the mutex
-        let final_result        = result.take();
-        final_result.expect("Finished background sync job without result")
+                // TODO: If we're woken up and the queue is idle, drain it until the result is available
+                if result.is_none() {
+                    // Need to drop the lock so we can safely run the queue
+                    mem::drop(result);
+
+                    // Re-acquire the lock
+                    result      = result_mutex.lock().expect("Background job result lock");
+                }
+            }
+
+            // Get the final result by swapping it out of the mutex
+            let final_result        = result.take();
+            final_result.expect("Finished background sync job without result")
+        };
+
+        // Clean up the wakers from the queue (should at least free our one)
+        mem::drop(wakeup);
+        queue.core.lock().unwrap().wake_blocked.retain(|waker| waker.strong_count() > 0);
+
+        // Return the result
+        final_result
     }
 
     ///

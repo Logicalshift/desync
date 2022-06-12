@@ -40,6 +40,9 @@ pub (super) struct JobQueueCore {
 
     /// The current state of this queue
     pub (super) state: QueueState,
+
+    /// If something is blocked on this queue, a condition variable to wake it up
+    pub (super) wake_blocked: Vec<Weak<Condvar>>,
 }
 
 impl fmt::Debug for JobQueue {
@@ -58,7 +61,8 @@ impl JobQueue {
         JobQueue { 
             core: Mutex::new(JobQueueCore {
                 queue:              VecDeque::new(),
-                state:              QueueState::Idle
+                state:              QueueState::Idle,
+                wake_blocked:       vec![],
             })
         }
     }
