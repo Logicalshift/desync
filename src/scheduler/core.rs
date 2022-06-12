@@ -136,12 +136,17 @@ impl SchedulerCore {
             let mut threads = self.threads.lock().expect("Scheduler threads lock");
 
             // TODO: retain doesn't return the removed elements. Really want drain_filter but it's been in nightly for 5 years so I guess it's never getting released?
-            for thread_num in 0..threads.len() {
+            let mut thread_num = 0;
+            while thread_num < threads.len() {
                 let (_, thread) = &threads[thread_num];
 
                 if thread.is_finished() {
+                    // Remove the thread and queue it for later despawning
                     let (is_busy, dead_thread) = threads.remove(thread_num);
                     dead_threads.push((is_busy, dead_thread));
+                } else {
+                    // Thread still running
+                    thread_num += 1;
                 }
             }
         }
