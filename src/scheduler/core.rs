@@ -125,6 +125,41 @@ impl SchedulerCore {
     }
 
     ///
+    /// If any of the scheduler threads have finished (which generally means they panicked), despawn them
+    ///
+    pub (super) fn remove_finished_threads(&self) {
+        let mut dead_threads = vec![];
+
+        // Collate the dead threads into a vec
+        {
+            // Find busy threads
+            let mut threads = self.threads.lock().expect("Scheduler threads lock");
+
+            // TODO: retain doesn't return the removed elements. Really want drain_filter but it's been in nightly for 5 years so I guess it's never getting released?
+            for thread_num in 0..threads.len() {
+                let (_, thread) = &threads[thread_num];
+
+                if thread.is_finished() {
+                    let (is_busy, dead_thread) = threads.remove(thread_num);
+                    dead_threads.push((is_busy, dead_thread));
+                }
+            }
+        }
+
+        // Despawn the dead threads (which might panic a bit)
+        for (is_busy, dead_thread) in dead_threads {
+            // Join with the thread in case it's mid-panic
+            dead_thread.despawn().join().unwrap();
+
+            // The busy flag should always be unset after a thread is despawned
+            let busy = is_busy.lock().unwrap();
+            if *busy {
+                panic!("Thread despawned while busy");
+            }
+        }
+    }
+
+    ///
     /// Attempts to schedule a task on a dormant thread
     ///
     pub (super) fn schedule_dormant<NextJob, RunJob, JobData>(&self, next_job: NextJob, job: RunJob) -> bool
@@ -132,9 +167,11 @@ impl SchedulerCore {
         RunJob:     'static + Send + Fn(JobData) -> (), 
         NextJob:    'static + Send + Fn() -> Option<JobData>,
     {
-        let mut threads = self.threads.lock().expect("Scheduler threads lock");
+        // Try to despawn any threads that have finished since the last time we were called
+        self.remove_finished_threads();
 
-        threads.retain(|(_busy, thread)| !thread.is_finished());
+        // Find busy threads
+        let threads = self.threads.lock().expect("Scheduler threads lock");
 
         // Find the first thread that is not marked as busy and schedule this task on it
         for &(ref busy_rc, ref thread) in threads.iter() {
