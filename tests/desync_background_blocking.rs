@@ -62,7 +62,7 @@ fn fill_thread_pool_with_wait_in_background() {
         // Sleep to allow the thread pool to saturate (tests all run in parallel so this will be most reliable when this test is run by itself)
         // (Another problem as this blocks the scheduler when it fails is it could cause other tests to time out, so definitely run this by itself
         // to check if there are issues)
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(200));
 
         // Send the release so our background thread finishes, and now the background desyncs can run
         println!("Releasing blocking desync...");
