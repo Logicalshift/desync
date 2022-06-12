@@ -135,7 +135,7 @@ impl SchedulerCore {
             // Find busy threads
             let mut threads = self.threads.lock().expect("Scheduler threads lock");
 
-            // TODO: retain doesn't return the removed elements. Really want drain_filter but it's been in nightly for 5 years so I guess it's never getting released?
+            // TODO: drain_filter in nightly would be better than this (but it's in nightly)
             let mut thread_num = 0;
             while thread_num < threads.len() {
                 let (_, thread) = &threads[thread_num];
@@ -154,12 +154,16 @@ impl SchedulerCore {
         // Despawn the dead threads (which might panic a bit)
         for (is_busy, dead_thread) in dead_threads {
             // Join with the thread in case it's mid-panic
-            dead_thread.despawn().join().unwrap();
+            let maybe_panic = dead_thread.despawn().join();
 
-            // The busy flag should always be unset after a thread is despawned
-            let busy = is_busy.lock().unwrap();
-            if *busy {
-                panic!("Thread despawned while busy");
+            if let Ok(()) = maybe_panic {
+                // The busy flag should always be unset after a thread is despawned
+                let busy = is_busy.lock().unwrap();
+                if *busy {
+                    panic!("Thread despawned while busy");
+                }
+            } else {
+                // Panics are relayed via the desync that failed
             }
         }
     }
