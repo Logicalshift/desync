@@ -128,7 +128,10 @@ impl SchedulerCore {
     /// Attempts to schedule a task on a dormant thread
     ///
     pub (super) fn schedule_dormant<NextJob, RunJob, JobData>(&self, next_job: NextJob, job: RunJob) -> bool
-    where RunJob: 'static+Send+Fn(JobData) -> (), NextJob: 'static+Send+Fn() -> Option<JobData> {
+    where
+        RunJob:     'static + Send + Fn(JobData) -> (), 
+        NextJob:    'static + Send + Fn() -> Option<JobData>,
+    {
         let threads = self.threads.lock().expect("Scheduler threads lock");
 
         // Find the first thread that is not marked as busy and schedule this task on it
