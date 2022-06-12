@@ -362,6 +362,7 @@ impl<T: Send> SchedulerFuture<T> {
                             return task::Poll::Ready(result.unwrap());
                         } else {
                             // Wait for the next poll
+                            self.result.lock().expect("Scheduler future result").waker = Some(context.waker().clone());
                             self.queue.core.lock().expect("JobQueue core lock").state = QueueState::WaitingForPoll(self.id);
 
                             // Wake both the queue and the context
@@ -472,7 +473,13 @@ impl<T: Send> Future for SchedulerFuture<T> {
                 };
 
                 // Wake up the calling context when the result becomes available
-                future_result.waker = Some(context.waker().clone());
+                match &run_action {
+                    SchedulerAction::DrainQueue         => { }
+
+                    SchedulerAction::WaitForCompletion  |
+                    SchedulerAction::ReturnValue(_)     |
+                    SchedulerAction::Panic              => { future_result.waker = Some(context.waker().clone()); }
+                }
 
                 run_action
             }
