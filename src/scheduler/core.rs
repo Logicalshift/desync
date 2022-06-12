@@ -132,7 +132,9 @@ impl SchedulerCore {
         RunJob:     'static + Send + Fn(JobData) -> (), 
         NextJob:    'static + Send + Fn() -> Option<JobData>,
     {
-        let threads = self.threads.lock().expect("Scheduler threads lock");
+        let mut threads = self.threads.lock().expect("Scheduler threads lock");
+
+        threads.retain(|(_busy, thread)| !thread.is_finished());
 
         // Find the first thread that is not marked as busy and schedule this task on it
         for &(ref busy_rc, ref thread) in threads.iter() {

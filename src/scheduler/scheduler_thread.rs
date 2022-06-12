@@ -64,6 +64,13 @@ impl SchedulerThread {
     }
 
     ///
+    /// Returns true if this scheduler thread has finished (eg: due to a panic)
+    ///
+    pub fn is_finished(&self) -> bool {
+        self.thread.is_finished()
+    }
+
+    ///
     /// De-spawns this thread and returns the join handle 
     ///
     pub fn despawn(self) -> thread::JoinHandle<()> {
