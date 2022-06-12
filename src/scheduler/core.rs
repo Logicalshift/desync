@@ -57,6 +57,39 @@ impl SchedulerCore {
     }
 
     ///
+    /// If a queue is pending and currently in the schedule (ie, has not yet been claimed by a thread), then move its state to 'Running'
+    /// and remove it from the schedule, claiming it for the current thread.
+    ///
+    /// Returns 'true' if the queue was claimed, false otherwise
+    ///
+    pub (super) fn claim_pending_queue(&self, queue: &Arc<JobQueue>) -> bool {
+        // Lock the schedule first
+        let mut schedule    = self.schedule.lock().expect("Schedule lock");
+
+        // Now claim the queue
+        let mut queue_core  = queue.core.lock().expect("Queue lock");
+
+        // The queue must be idle or pending to be claimable
+        match queue_core.state {
+            QueueState::Pending |
+            QueueState::Idle    => {
+                // Move the queue to the running state
+                queue_core.state = QueueState::Running;
+
+                // Remove from the schedule
+                schedule.retain(|scheduled_queue| !Arc::ptr_eq(scheduled_queue, queue));
+
+                true
+            }
+
+            _ => {
+                // Any other state does not cause the queue to start running
+                false
+            }
+        }
+    }
+
+    ///
     /// If a queue is idle and has pending jobs, places it in the schedule
     ///
     pub (super) fn reschedule_queue(&self, queue: &Arc<JobQueue>, core: Arc<SchedulerCore>) {
