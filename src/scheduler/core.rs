@@ -63,6 +63,15 @@ impl SchedulerCore {
         let reschedule = {
             let mut core = queue.core.lock().expect("JobQueue core lock");
 
+            // Signal any waiting condition variables
+            core.wake_blocked.iter_mut()
+                .for_each(|cond_var| {
+                    if let Some(cond_var) = cond_var.upgrade() {
+                        cond_var.notify_one();
+                    }
+                });
+            core.wake_blocked.retain(|cond_var| cond_var.strong_count() > 0);
+
             match core.state {
                 QueueState::Idle => {
                     // Schedule a thread to restart the queue if more things were queued
