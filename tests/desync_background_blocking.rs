@@ -3,8 +3,8 @@ extern crate futures;
 
 use desync::Desync;
 
-mod scheduler;
-use self::scheduler::timeout::*;
+mod timeout;
+use self::timeout::*;
 
 use std::sync::*;
 
