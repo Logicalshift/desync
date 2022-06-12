@@ -464,10 +464,23 @@ impl Scheduler {
                 // Use the condition variable to wait for the wakeup
                 result = wakeup.wait(result).expect("Background job cvar wait");
 
-                // TODO: If we're woken up and the queue is idle, drain it until the result is available
+                // If we're woken up and the queue is idle, drain it until the result is available
                 if result.is_none() {
                     // Need to drop the lock so we can safely run the queue
                     mem::drop(result);
+
+                    if self.core.claim_pending_queue(queue) {
+                        // We're now running the queue: try to run jobs on it until it's ready
+                        while result_mutex.lock().unwrap().is_none() {
+                            match JobQueue::run_one_job_now(queue) {
+                                JobStatus::Finished | JobStatus::NoJobsWaiting => { },
+                            }
+                        }
+
+                        // Reschedule the queue once we're done
+                        queue.core.lock().unwrap().state = QueueState::Idle;
+                        self.reschedule_queue(queue);
+                    }
 
                     // Re-acquire the lock
                     result      = result_mutex.lock().expect("Background job result lock");
