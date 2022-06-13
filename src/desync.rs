@@ -2,7 +2,6 @@
 //! The main `Desync` struct
 //! 
 
-pub use crate::desync_borrow_future::*;
 use super::scheduler::*;
 
 use std::sync::{Arc};

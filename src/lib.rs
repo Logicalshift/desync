@@ -130,7 +130,6 @@ extern crate num_cpus;
 pub mod scheduler;
 pub mod desync;
 pub mod pipe;
-mod desync_borrow_future;
 
 pub use self::scheduler::{TrySyncError};
 pub use self::desync::*;
