@@ -2,7 +2,7 @@
 
 ```toml
 [dependencies]
-desync = "0.8"
+desync = "0.9"
 ```
 
 Desync provides a new synchronisation type, `Desync<T>`, which works by ordering operations on
