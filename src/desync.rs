@@ -5,11 +5,13 @@
 use super::scheduler::*;
 
 use std::sync::{Arc};
-use std::marker::{Unpin};
+use std::marker::{PhantomData, Unpin};
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
+use std::cell::{UnsafeCell};
 use std::mem;
+use std::panic::{UnwindSafe};
 use std::result::{Result};
 
 ///
@@ -17,16 +19,21 @@ use std::result::{Result};
 ///
 pub struct Desync<T: Send+Unpin> {
     /// Queue used for scheduling runtime for this object
-    queue:  Arc<JobQueue>,
+    queue:   Arc<JobQueue>,
 
     /// Data for this object. Boxed so the pointer remains the same through the lifetime of the object.
-    data:   *mut T
+    data:    *mut T,
+
+    /// Mark this type as !RefUnwindSafe.
+    _marker: PhantomData<UnsafeCell<T>>
 }
 
 unsafe impl<T: Send+Unpin> Send for Desync<T> {}
 
 // True iff queue: Sync
 unsafe impl<T: Send+Unpin> Sync for Desync<T> {}
+
+impl<T: Send+Unpin+UnwindSafe> UnwindSafe for Desync<T> {}
 
 ///
 /// Used for passing the data pointer through to the queue
@@ -48,8 +55,9 @@ impl<T: 'static+Send+Unpin> Desync<T> {
         let queue = queue();
 
         Desync {
-            queue:  queue,
-            data:   Box::into_raw(Box::new(data))
+            queue:   queue,
+            data:    Box::into_raw(Box::new(data)),
+            _marker: PhantomData
         }
     }
 
