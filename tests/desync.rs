@@ -6,6 +6,7 @@ use desync::Desync;
 mod scheduler;
 use self::scheduler::timeout::*;
 
+use futures::prelude::*;
 use futures::future;
 
 use std::sync::*;
@@ -77,7 +78,7 @@ fn update_data_with_future() {
         });
 
         executor::block_on(async {
-            let future = desynced.future_desync(|data| { future::ready(data.val) });
+            let future = desynced.future_desync(|data| { future::ready(data.val) }.boxed());
             assert!(future.await.unwrap() == 42);
         });
     }, 500);
@@ -121,7 +122,7 @@ fn update_data_with_future_sync() {
         });
 
         executor::block_on(async {
-            let future = desynced.future_sync(|data| { future::ready(data.val) });
+            let future = desynced.future_sync(|data| { future::ready(data.val) }.boxed());
             assert!(future.await.unwrap() == 42);
         });
     }, 500);
@@ -144,7 +145,7 @@ fn update_data_with_future_sync_1000_times() {
             });
 
             executor::block_on(async {
-                let future = desynced.future_sync(|data| future::ready(data.val));
+                let future = desynced.future_sync(|data| future::ready(data.val).boxed());
                 
                 assert!(future.await.unwrap() == 43);
             });
@@ -236,11 +237,11 @@ fn future_and_sync() {
             let result = core.future_desync(move |_core| {
                 async move {
                     Some(recv.await.unwrap())
-                }
+                }.boxed()
             }).await;
 
             *data = result.unwrap();
-        }
+        }.boxed()
     });
 
     // Signal the future after a delay
@@ -275,9 +276,9 @@ fn double_future_and_sync() {
         async move {
             // Wait for a task on the core
             *val = core_1.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(400)); Some(1) }
+                async move { thread::sleep(Duration::from_millis(400)); Some(1) }.boxed()
             }).await.unwrap();
-        }
+        }.boxed()
     }).detach();
 
     let core_2      = Arc::clone(&core);
@@ -288,9 +289,9 @@ fn double_future_and_sync() {
 
             // Wait for a task on the core
             *val = core_2.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(200)); Some(2) }
+                async move { thread::sleep(Duration::from_millis(200)); Some(2) }.boxed()
             }).await.unwrap();
-        }
+        }.boxed()
     }).detach();
 
     let core_3      = Arc::clone(&core);
@@ -301,9 +302,9 @@ fn double_future_and_sync() {
 
             // Wait for a task on the core
             *val = core_3.future_desync(move |_| {
-                async move { thread::sleep(Duration::from_millis(200)); Some(3) }
+                async move { thread::sleep(Duration::from_millis(200)); Some(3) }.boxed()
             }).await.unwrap();
-        }
+        }.boxed()
     }).detach();
 
     // Wait for the result from the futures synchronously

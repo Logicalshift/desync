@@ -127,7 +127,7 @@ where
                         }
                     }
                 }
-            });
+            }.boxed());
         } else {
             // Stream has woken up but the desync is no longer listening
             (*arc_self.poll_fn.lock().unwrap()) = None;

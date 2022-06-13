@@ -242,7 +242,7 @@ impl<T: 'static+Send> Desync<T> {
             async move {
                 let future_result = after.await;
                 job(data, future_result)
-            }
+            }.boxed()
         })
     }
 }
