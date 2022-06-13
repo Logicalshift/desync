@@ -385,7 +385,7 @@ impl Scheduler {
         // Queue a job that'll run the requested job and then set the result
         // We'll unpark the thread in case we need to handle a suspension
         let queue_result        = result.clone();
-        let result_job          = Box::new(Job::new(move || {
+        let mut result_job      = Box::new(Job::new(move || {
             let job_result = job();
             *queue_result.0.lock().expect("Sync queue result lock") = Some(job_result);
             queue_result.1.notify_one();
@@ -394,7 +394,7 @@ impl Scheduler {
         // Stuff on the queue normally has a 'static lifetime. When we're running
         // sync, the task will be done by the time this method is finished, so
         // we use an unsafe job to bypass the normal lifetime checking
-        let unsafe_result_job   = UnsafeJob::new(&*result_job);
+        let unsafe_result_job   = unsafe { UnsafeJob::new(&mut *result_job) };
         queue.core.lock().expect("JobQueue core lock").queue.push_back(Box::new(unsafe_result_job));
 
         // While there is no result, run a job from the queue
@@ -430,7 +430,7 @@ impl Scheduler {
         let pair2   = (wakeup.clone(), result.clone());
 
         // Safe job that signals the condvar when needed
-        let job     = Box::new(Job::new(move || {
+        let mut job = Box::new(Job::new(move || {
             let (cvar, result) = pair2;
 
             // Run the job
@@ -447,7 +447,7 @@ impl Scheduler {
         // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
         let need_reschedule = {
             // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
-            let unsafe_job  = Box::new(UnsafeJob::new(&*job));
+            let unsafe_job  = Box::new(unsafe { UnsafeJob::new(&mut *job) });
             let mut core    = queue.core.lock().expect("JobQueue core lock");
 
             core.queue.push_back(unsafe_job);
