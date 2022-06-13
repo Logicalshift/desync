@@ -67,7 +67,9 @@ const PIPE_BACKPRESSURE_COUNT: usize = 5;
 /// Futures notifier used to wake up a pipe when a stream or future notifies
 ///
 struct PipeContext<Core, PollFn>
-where   Core: Send+Unpin {
+where
+    Core: Send + Unpin 
+{
     /// The desync target that will be woken when the stream notifies that it needs to be polled
     ///   We keep a weak reference so that if the stream/future is all that's left referencing the
     ///   desync, it's thrown away
@@ -78,8 +80,10 @@ where   Core: Send+Unpin {
 }
 
 impl<Core, PollFn> PipeContext<Core, PollFn>
-where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
+where
+    Core:   'static + Send + Unpin,
+    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool>
+{
     ///
     /// Creates a new pipe context, ready to poll
     ///
@@ -132,8 +136,10 @@ where   Core:   'static+Send+Unpin,
 }
 
 impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
-where   Core:   'static+Send+Unpin,
-        PollFn: 'static+Send+for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool> {
+where
+    Core:   'static + Send + Unpin,
+    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool>,
+{
     fn wake_by_ref(arc_self: &Arc<Self>) {
         Self::poll(Arc::clone(arc_self));
     }
@@ -155,10 +161,12 @@ where   Core:   'static+Send+Unpin,
 /// start draining into the `Desync` object.
 /// 
 pub fn pipe_in<Core, S, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn)
-where   Core:       'static+Send+Unpin,
-        S:          'static+Send+Unpin+Stream,
-        S::Item:    Send,
-        ProcessFn:  'static+Send+for<'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, ()> {
+where
+    Core:       'static + Send + Unpin,
+    S:          'static + Send + Unpin + Stream,
+    S::Item:    Send,
+    ProcessFn:  'static + Send + for<'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, ()>,
+{
 
     let stream      = Arc::new(Mutex::new(stream));
     let process     = Arc::new(Mutex::new(process));
@@ -241,11 +249,13 @@ where   Core:       'static+Send+Unpin,
 /// ```
 /// 
 pub fn pipe<Core, S, Output, ProcessFn>(desync: Arc<Desync<Core>>, stream: S, process: ProcessFn) -> PipeStream<Output>
-where   Core:       'static+Send+Unpin,
-        S:          'static+Send+Unpin+Stream,
-        S::Item:    Send,
-        Output:     'static+Send,
-        ProcessFn:  'static+Send+for <'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, Output> {
+where
+    Core:       'static + Send + Unpin,
+    S:          'static + Send + Unpin + Stream,
+    S::Item:    Send,
+    Output:     'static + Send,
+    ProcessFn:  'static + Send + for <'a> FnMut(&'a mut Core, S::Item) -> BoxFuture<'a, Output>,
+{
 
     // Prepare the streams
     let input_stream        = Arc::new(Mutex::new(stream));
