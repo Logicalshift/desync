@@ -2,10 +2,12 @@
 //! The main `Desync` struct
 //! 
 
+pub use crate::desync_borrow_future::*;
 use super::scheduler::*;
 
 use std::sync::{Arc};
 use std::marker::{PhantomData};
+use futures::prelude::*;
 use futures::channel::oneshot;
 use futures::future::{Future, BoxFuture};
 
@@ -170,11 +172,10 @@ impl<T: 'static+Send> Desync<T> {
     /// The normal `sync()` and `desync()` methods will schedule their operations in order around any `future_sync()`
     /// or `future_desync()` calls, so it's possible to easily mix async and traditional threaded code in one program.
     ///
-    pub fn future_desync<'a, TFn, TFuture>(&self, job: TFn) -> SchedulerFuture<TFuture::Output>
+    pub fn future_desync<'a, TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
     where
-        TFn:                'static + Send + FnOnce(&'a mut T) -> TFuture,
-        TFuture:            'a + Send + Future,
-        TFuture::Output:    'static + Send,
+        TFn:        'static + Send + for<'borrow> DesyncBorrowStaticFuture<'borrow, T, TOutput>,
+        TOutput:    'static + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
         // because queues only execute one task at a time
@@ -182,7 +183,7 @@ impl<T: 'static+Send> Desync<T> {
 
         scheduler().future_desync(&self.queue, move || {
             let data        = data.0;
-            let job         = job(unsafe { &mut *data });
+            let job         = job.make_future_box(unsafe { &mut *data });
 
             async {
                 job.await
@@ -209,19 +210,17 @@ impl<T: 'static+Send> Desync<T> {
     /// The normal `sync()` and `desync()` methods will schedule their operations in order around any `future_sync()`
     /// or `future_desync()` calls, so it's possible to easily mix async and traditional threaded code in one program.
     ///
-    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>> + Send
+    pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TOutput, oneshot::Canceled>> + Send
     where
-        TFn:                'a + Send + FnOnce(&'b mut T) -> TFuture,
-        TFuture:            'b + Send + Future,
-        TFuture::Output:    'a + Send,
-        'b:                 'a,
+        TFn:        'a + Send + for<'borrow> DesyncBorrowFuture<'borrow, T, TOutput>,
+        TOutput:    'a + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure
         let data = DataRef::<T>(self.data);
 
         scheduler().future_sync(&self.queue, move || {
             let data        = data.0;
-            let job         = job(unsafe { &mut *data });
+            let job         = job.make_future_box(unsafe { &mut *data });
 
             async {
                 job.await
