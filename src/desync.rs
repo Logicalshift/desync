@@ -174,7 +174,7 @@ impl<T: 'static+Send> Desync<T> {
     ///
     pub fn future_desync<'a, TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
     where
-        TFn:        'static + Send + for<'borrow> DesyncBorrowStaticFuture<'borrow, T, TOutput>,
+        TFn:        'static + Send + for<'borrow> FnOnce(&'borrow mut T) -> BoxFuture<'borrow, TOutput>,
         TOutput:    'static + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
@@ -183,7 +183,7 @@ impl<T: 'static+Send> Desync<T> {
 
         scheduler().future_desync(&self.queue, move || {
             let data        = data.0;
-            let job         = job.make_future_box(unsafe { &mut *data });
+            let job         = job(unsafe { &mut *data });
 
             async {
                 job.await
@@ -212,7 +212,7 @@ impl<T: 'static+Send> Desync<T> {
     ///
     pub fn future_sync<'a, TFn, TOutput>(&'a self, job: TFn) -> impl 'a + Future<Output=Result<TOutput, oneshot::Canceled>> + Send
     where
-        TFn:        'a + Send + for<'borrow> DesyncBorrowFuture<'borrow, T, TOutput>,
+        TFn:        'a + Send + for<'borrow> FnOnce(&'borrow mut T) -> BoxFuture<'borrow, TOutput>,
         TOutput:    'a + Send,
     {
         // The future will have a lifetime shorter than the lifetime of this structure
@@ -220,7 +220,7 @@ impl<T: 'static+Send> Desync<T> {
 
         scheduler().future_sync(&self.queue, move || {
             let data        = data.0;
-            let job         = job.make_future_box(unsafe { &mut *data });
+            let job         = job(unsafe { &mut *data });
 
             async {
                 job.await
