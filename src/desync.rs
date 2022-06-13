@@ -4,7 +4,6 @@
 
 use super::scheduler::*;
 
-use std::pin::{Pin};
 use std::sync::{Arc};
 use std::marker::{Unpin};
 use futures::channel::oneshot;
@@ -21,11 +20,9 @@ pub struct Desync<T: Send+Unpin> {
     queue:  Arc<JobQueue>,
 
     /// Data for this object. Boxed so the pointer remains the same through the lifetime of the object.
-    /// Will be 'None' only briefly when the data has been taken to be dropped
-    data:   Option<Pin<Box<T>>>
+    data:   *mut T
 }
 
-// Rust actually derives this anyway at the moment
 unsafe impl<T: Send+Unpin> Send for Desync<T> {}
 
 // True iff queue: Sync
@@ -37,7 +34,7 @@ unsafe impl<T: Send+Unpin> Sync for Desync<T> {}
 /// 'Safe' because the queue is synchronised during drop, so we can never use the pointer
 /// if the object does not exist.
 /// 
-struct DataRef<T: Send>(*const T);
+struct DataRef<T: Send>(*mut T);
 unsafe impl<T: Send> Send for DataRef<T> {}
 
 // TODO: we can change DataRef to Shared (https://doc.rust-lang.org/std/ptr/struct.Shared.html in the future)
@@ -52,7 +49,7 @@ impl<T: 'static+Send+Unpin> Desync<T> {
 
         Desync {
             queue:  queue,
-            data:   Some(Pin::new(Box::new(data)))
+            data:   Box::into_raw(Box::new(data))
         }
     }
 
@@ -82,10 +79,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     pub fn desync<TFn>(&self, job: TFn)
     where TFn: 'static+Send+FnOnce(&mut T) -> () {
         // As drop() is the last thing called, we know that this object will still exist at the point where the queue makes the asynchronous callback
-        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+        let data = DataRef::<T>(self.data);
 
         desync(&self.queue, move || {
-            let data = data.0 as *mut T;
+            let data = data.0;
             job(unsafe { &mut *data });
         })
     }
@@ -100,10 +97,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
             // Exclusivity is guaranteed because the queue executes only one task at a time
-            let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+            let data = DataRef::<T>(self.data);
 
             sync(&self.queue, move || {
-                let data = data.0 as *mut T;
+                let data = data.0;
                 job(unsafe { &mut *data })
             })
         };
@@ -118,10 +115,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     where TFn: Send+FnOnce(&mut T) -> FnResult, FnResult: Send {
         let result = {
             // As drop() is the last thing called, we know that this object will still exist at the point where the callback occurs
-            let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+            let data = DataRef::<T>(self.data);
 
             try_sync(&self.queue, move || {
-                let data = data.0 as *mut T;
+                let data = data.0;
                 job(unsafe { &mut *data })
             })
         };
@@ -173,10 +170,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
     {
         // The future will have a lifetime shorter than the lifetime of this structure, and exclusivity is guaranteed
         // because queues only execute one task at a time
-        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+        let data = DataRef::<T>(self.data);
 
         scheduler().future_desync(&self.queue, move || {
-            let data        = data.0 as *mut T;
+            let data        = data.0;
             let job         = job(unsafe { &mut *data });
 
             async {
@@ -212,10 +209,10 @@ impl<T: 'static+Send+Unpin> Desync<T> {
         'b:                 'a,
     {
         // The future will have a lifetime shorter than the lifetime of this structure
-        let data = DataRef::<T>(&**self.data.as_ref().unwrap());
+        let data = DataRef::<T>(self.data);
 
         scheduler().future_sync(&self.queue, move || {
-            let data        = data.0 as *mut T;
+            let data        = data.0;
             let job         = job(unsafe { &mut *data });
 
             async {
@@ -248,7 +245,7 @@ impl<T: Send+Unpin> Drop for Desync<T> {
         use std::thread;
 
         // Take the data we're about to drop from the object
-        let data = self.data.take();
+        let data = DataRef::<T>(self.data);
 
         // Ensure that everything on the queue has committed by queueing a last synchronous event
         // (Not synchronising the queue would make this unsafe as we would hold on to a pointer to
@@ -256,12 +253,14 @@ impl<T: Send+Unpin> Drop for Desync<T> {
         if thread::panicking() {
             // If the thread is already panicking when we're dropped, do not panic again
             scheduler().sync_no_panic(&self.queue, move || {
-                mem::drop(data);
+                let data = data.0;
+                mem::drop(unsafe { Box::from_raw(data) });
             });
         } else {
             // Thread is not panicking
             sync(&self.queue, move || {
-                mem::drop(data);
+                let data = data.0;
+                mem::drop(unsafe { Box::from_raw(data) });
             });
         }
     }
