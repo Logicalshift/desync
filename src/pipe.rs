@@ -202,6 +202,9 @@ where
 
     // Trigger the initial poll
     PipeContext::poll(context);
+
+    // Synchronise once the initial poll has completed
+    desync.sync(|_| { });
 }
 
 ///
@@ -358,6 +361,9 @@ where
 
     // Poll the context to start the stream running
     PipeContext::poll(context);
+
+    // Synchronise once the initial poll has completed
+    desync.sync(|_| { });
 
     output_stream
 }
