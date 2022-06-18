@@ -171,7 +171,7 @@ impl<T: 'static+Send> Desync<T> {
     /// The normal `sync()` and `desync()` methods will schedule their operations in order around any `future_sync()`
     /// or `future_desync()` calls, so it's possible to easily mix async and traditional threaded code in one program.
     ///
-    pub fn future_desync<'a, TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
+    pub fn future_desync<TFn, TOutput>(&self, job: TFn) -> SchedulerFuture<TOutput>
     where
         TFn:        'static + Send + for<'borrow> FnOnce(&'borrow mut T) -> BoxFuture<'borrow, TOutput>,
         TOutput:    'static + Send,
@@ -231,7 +231,7 @@ impl<T: 'static+Send> Desync<T> {
     /// After the pending operations for this item are performed, waits for the
     /// supplied future to complete and then calls the specified function
     ///
-    pub fn after<'a, TFn, Res, Fut>(&self, after: Fut, job: TFn) -> impl 'static + Future<Output=Result<Res, oneshot::Canceled>> + Send 
+    pub fn after<TFn, Res, Fut>(&self, after: Fut, job: TFn) -> impl Future<Output=Result<Res, oneshot::Canceled>> + Send
     where 
         Res: 'static + Send,
         Fut: 'static + Future + Send,

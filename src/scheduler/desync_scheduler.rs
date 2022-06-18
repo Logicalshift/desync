@@ -226,10 +226,10 @@ impl Scheduler {
     /// The future will run to completion even if the return value is discarded, and may run in the context of a desync execution
     /// pool (ie, will run even if the current thread is blocked)
     ///
-    pub fn future_desync<'a, TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
+    pub fn future_desync<TFn, TFuture>(&self, queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
     where
         TFn:                'static + Send + FnOnce() -> TFuture,
-        TFuture:            'a + Send + Future,
+        TFuture:            Send + Future,
         TFuture::Output:    'static + Send 
     {
         let (receive, send) = SchedulerFuture::new(queue, Arc::clone(&self.core));
@@ -261,12 +261,11 @@ impl Scheduler {
     /// more complex to schedule than `future_desync` futures, but the callback function has a shorter lifespan making it easier 
     /// to use when borrowing values.
     ///
-    pub fn future_sync<'a, 'b, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
+    pub fn future_sync<'a, TFn, TFuture>(&'a self, queue: &Arc<JobQueue>, job: TFn) -> impl 'a + Future<Output=Result<TFuture::Output, oneshot::Canceled>>+Send
     where
         TFn:                'a + Send + FnOnce() -> TFuture,
-        TFuture:            'b + Send + Future,
+        TFuture:            'a + Send + Future,
         TFuture::Output:    Send,
-        'b:                 'a,
     {
         // Box the job (so it implements Unpin)
         let job = Box::new(job);
@@ -701,8 +700,8 @@ pub fn desync<TFn: 'static+Send+FnOnce() -> ()>(queue: &Arc<JobQueue>, job: TFn)
 ///
 pub fn future_desync<TFn, TFuture>(queue: &Arc<JobQueue>, job: TFn) -> SchedulerFuture<TFuture::Output>
 where   TFn:                'static+Send+FnOnce() -> TFuture,
-        TFuture:            'static+Send+Future,
-        TFuture::Output:    Send {
+        TFuture:            Send+Future,
+        TFuture::Output:    'static+Send {
     scheduler().future_desync(queue, job)
 }
 
