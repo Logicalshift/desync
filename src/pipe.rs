@@ -130,7 +130,11 @@ where
             }.boxed()).detach();
         } else {
             // Stream has woken up but the desync is no longer listening
-            (*arc_self.poll_fn.lock().unwrap()) = None;
+            let old_poll_fn = arc_self.poll_fn.lock().unwrap().take();
+            REFERENCE_CHUTE.desync(move |_| {
+                use std::mem;
+                mem::drop(old_poll_fn);
+            });
         }
     }
 }
