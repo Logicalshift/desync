@@ -106,7 +106,7 @@ where
             let maybe_poll_fn = Arc::clone(&arc_self.poll_fn);
 
             // Schedule a polling operation on the desync
-            let _ = target.future_desync(move |core| {
+            target.future_desync(move |core| {
                 async move {
                     // Create a futures context from the context reference
                     let waker   = task::waker_ref(&arc_self);
@@ -127,7 +127,7 @@ where
                         }
                     }
                 }
-            }.boxed());
+            }.boxed()).detach();
         } else {
             // Stream has woken up but the desync is no longer listening
             (*arc_self.poll_fn.lock().unwrap()) = None;
