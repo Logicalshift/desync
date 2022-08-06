@@ -17,5 +17,8 @@ categories      = ["concurrency","asynchronous","algorithms","data-structures"]
 lazy_static     = "1.3"
 futures         = "0.3"
 
+[dev-dependencies]
+wasm-bindgen-test   = "0.3"
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 num_cpus        = "1.10"

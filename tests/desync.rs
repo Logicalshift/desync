@@ -2,6 +2,7 @@ extern crate desync;
 extern crate futures;
 
 use desync::Desync;
+use wasm_bindgen_test::*;
 
 mod scheduler;
 use self::scheduler::timeout::*;
@@ -19,6 +20,7 @@ struct TestData {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn retrieve_data_synchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
@@ -26,6 +28,7 @@ fn retrieve_data_synchronously() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn retrieve_data_into_local_var() {
     let desynced = Desync::new(TestData { val: 42 });
     let mut val = 0;
@@ -36,6 +39,7 @@ fn retrieve_data_into_local_var() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_asynchronously() {
     let desynced = Desync::new(TestData { val: 0 });
 
@@ -48,6 +52,7 @@ fn update_data_asynchronously() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_asynchronously_1000_times() {
     for _i in 0..1000 {
         timeout(|| {
@@ -66,6 +71,7 @@ fn update_data_asynchronously_1000_times() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_with_future() {
     timeout(|| {
         use futures::executor;
@@ -85,6 +91,7 @@ fn update_data_with_future() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_with_future_1000_times() {
     // Seems to timeout fairly reliably after signalling the future
     use futures::executor;
@@ -110,6 +117,7 @@ fn update_data_with_future_1000_times() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_with_future_sync() {
     timeout(|| {
         use futures::executor;
@@ -129,6 +137,7 @@ fn update_data_with_future_sync() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn update_data_with_future_sync_1000_times() {
     // Seems to timeout fairly reliably after signalling the future
     use futures::executor;
@@ -154,6 +163,7 @@ fn update_data_with_future_sync_1000_times() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn dropping_while_running_isnt_obviously_bad() {
     let desynced = Desync::new(TestData { val: 0 });
 
@@ -168,6 +178,7 @@ fn dropping_while_running_isnt_obviously_bad() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn wait_for_future() {
     // TODO: occasional test failure that happens if the future 'arrives' before the queue is empty
     // (Because we need a future that arrives when the queue is actually suspended)
@@ -258,6 +269,7 @@ fn future_and_sync() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn double_future_and_sync() {
     use std::thread;
 
@@ -314,6 +326,7 @@ fn double_future_and_sync() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn try_sync_succeeds_on_idle_queue() {
     timeout(|| {
         let core        = Desync::new(0);
@@ -333,6 +346,7 @@ fn try_sync_succeeds_on_idle_queue() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn try_sync_succeeds_on_idle_queue_after_async_job() {
     timeout(|| {
         use std::thread;
@@ -357,6 +371,7 @@ fn try_sync_succeeds_on_idle_queue_after_async_job() {
 }
 
 #[test]
+#[wasm_bindgen_test]
 fn try_sync_fails_on_busy_queue() {
     timeout(|| {
         use std::sync::mpsc::*;
