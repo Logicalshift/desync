@@ -1,6 +1,7 @@
 use desync::scheduler::*;
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn will_despawn_extra_threads() {
     // As we join with the threads, we'll timeout if any of the spawned threads fail to end
     let scheduler = scheduler();

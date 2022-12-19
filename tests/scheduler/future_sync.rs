@@ -85,6 +85,7 @@ fn wake_future_with_no_scheduler_threads() {
 }
 
 #[test]
+#[cfg(not(miri))]   // Clock not supported
 fn wait_for_future() {
     timeout(|| {
         use futures::executor;
@@ -183,6 +184,7 @@ impl ArcWake for TestWaker {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn wait_for_sync_future_from_desync_future() {
     use futures::executor;
 
@@ -215,6 +217,7 @@ fn wait_for_sync_future_from_desync_future() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn wait_for_sync_future_from_desync_future_without_awaiting() {
     timeout(|| {
         // This reproduces a deadlock due to a race condition, so we usually need several iterations through the test before the issue will occur
@@ -240,6 +243,7 @@ fn wait_for_sync_future_from_desync_future_without_awaiting() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn wait_for_desync_future_from_sync_future() {
     use futures::executor;
 
@@ -272,6 +276,7 @@ fn wait_for_desync_future_from_sync_future() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn wait_for_sync_future_from_sync_future() {
     use futures::executor;
 

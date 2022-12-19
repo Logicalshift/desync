@@ -8,6 +8,7 @@ use std::sync::*;
 use std::sync::mpsc::*;
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn suspend_queue_with_background_thread() {
     for _x in 0..1000 {
         timeout(|| {

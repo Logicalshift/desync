@@ -98,6 +98,7 @@ fn wake_future_with_no_scheduler_threads() {
 }
 
 #[test]
+#[cfg(not(miri))]   // timer not supported
 fn wait_for_future() {
     timeout(|| {
         use futures::executor;
@@ -279,6 +280,7 @@ fn poll_two_futures_on_one_queue() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn wait_for_desync_future_from_desync_future() {
     use futures::executor;
 

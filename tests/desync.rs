@@ -53,6 +53,7 @@ fn update_data_asynchronously() {
 
 #[test]
 #[wasm_bindgen_test]
+#[cfg(not(miri))]   // slow!
 fn update_data_asynchronously_1000_times() {
     for _i in 0..1000 {
         timeout(|| {
@@ -92,6 +93,7 @@ fn update_data_with_future() {
 
 #[test]
 #[wasm_bindgen_test]
+#[cfg(not(miri))]   // slow!
 fn update_data_with_future_1000_times() {
     // Seems to timeout fairly reliably after signalling the future
     use futures::executor;
@@ -138,6 +140,7 @@ fn update_data_with_future_sync() {
 
 #[test]
 #[wasm_bindgen_test]
+#[cfg(not(miri))]   // slow!
 fn update_data_with_future_sync_1000_times() {
     // Seems to timeout fairly reliably after signalling the future
     use futures::executor;

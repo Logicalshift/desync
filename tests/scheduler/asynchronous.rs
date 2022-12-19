@@ -40,6 +40,7 @@ fn panicking_panics_with_future_queues() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn async_only_runs_once() {
     for _x in 0..1000 {
         timeout(|| {
@@ -62,6 +63,7 @@ fn async_only_runs_once() {
 }
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn async_runs_in_order_1000_iter() {
     for _x in 0..1000 {
         timeout(|| {
