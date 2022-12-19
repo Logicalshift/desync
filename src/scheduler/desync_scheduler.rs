@@ -454,6 +454,8 @@ impl Scheduler {
 
         // Wait for the result to arrive (and the sweet relief of no more unsafe job)
         let final_result = {
+            // TODO: small chance of undefined behaviour here: if the result is available before the condition variable is signalled, we never wait for the job
+            // to finish, which can result in us trying to dispose it while the function is still running on the other thread
             let result_mutex    = result;
             let mut result      = result_mutex.lock().expect("Background job result lock");
             
