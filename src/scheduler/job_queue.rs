@@ -113,7 +113,7 @@ impl JobQueue {
                 match poll_result {
                     Poll::Ready(()) => { },
                     Poll::Pending   => { 
-                        // Job needs requeing
+                        // Job needs requeuing
                         self.requeue(job);
 
                         // Queue should move from the 'running' state to the 'waiting for wake' state
