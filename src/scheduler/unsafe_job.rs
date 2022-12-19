@@ -13,7 +13,7 @@ pub struct UnsafeJob {
     action: *mut dyn ScheduledJob,
 
     /// Optional condition variable signalled once the job has finished running 
-    on_finish: Option<Condvar>,
+    on_finish: Option<Arc<Condvar>>,
 }
 
 impl UnsafeJob {
