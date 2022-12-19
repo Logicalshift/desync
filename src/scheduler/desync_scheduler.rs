@@ -425,19 +425,17 @@ impl Scheduler {
         // Queue a job that unparks this thread when done
         let wakeup  = Arc::new(Condvar::new());
         let result  = Arc::new(Mutex::new(None));
-
-        let pair2   = (wakeup.clone(), result.clone());
+        let result2 = result.clone();
 
         // Safe job that signals the condvar when needed
         let mut job = Box::new(Job::new(move || {
-            let (cvar, result) = pair2;
+            let result = result2;
 
             // Run the job
             let actual_result = job();
 
             // Set the result and notify the waiting thread
             *result.lock().expect("Background job result lock") = Some(actual_result);
-            cvar.notify_one();
         }));
 
         // Add our condition variable to the list of wakers scheduled for the queue
@@ -446,7 +444,7 @@ impl Scheduler {
         // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
         let need_reschedule = {
             // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
-            let unsafe_job  = Box::new(unsafe { UnsafeJob::new(&mut *job) });
+            let unsafe_job  = Box::new(unsafe { UnsafeJob::new_with_notification(&mut *job, Arc::clone(&wakeup)) });
             let mut core    = queue.core.lock().expect("JobQueue core lock");
 
             core.queue.push_back(unsafe_job);

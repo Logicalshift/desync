@@ -27,6 +27,17 @@ impl UnsafeJob {
         // (We're safe provided this job is executed before the reference goes away)
         UnsafeJob { action: mem::transmute(action_ptr), on_finish: None }
     }
+
+    ///
+    /// Creates an unsafe job that notifies a condition variable when it's finished. The referenced object should last as long as the job does
+    ///
+    pub unsafe fn new_with_notification<'a>(action: &'a mut dyn ScheduledJob, on_finish: Arc<Condvar>) -> UnsafeJob {
+        let action_ptr: *mut dyn ScheduledJob = action;
+
+        // Transmute to remove the lifetime parameter :-/
+        // (We're safe provided this job is executed before the reference goes away)
+        UnsafeJob { action: mem::transmute(action_ptr), on_finish: Some(on_finish) }
+    }
 }
 unsafe impl Send for UnsafeJob {}
 
