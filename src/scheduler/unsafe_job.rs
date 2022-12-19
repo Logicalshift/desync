@@ -7,7 +7,7 @@ use std::mem;
 /// The unsafe job does not manage the lifetime of its TFn
 ///
 pub struct UnsafeJob {
-    // TODO: this can become Shared<> once that API stabilises
+    // TODO: this can possibly become Shared<> once that API stabilises
     action: *mut dyn ScheduledJob
 }
 
