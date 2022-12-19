@@ -6,7 +6,7 @@ use std::sync::mpsc::*;
 
 use desync::scheduler::*;
 
-#[cfg(not(target_family="wasm"))]
+#[cfg(all(not(target_family="wasm"), not(miri)))]
 pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
     enum ThreadState {
         Ok,
@@ -63,7 +63,7 @@ pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, millis: u64) {
     }
 }
 
-#[cfg(target_family="wasm")]
+#[cfg(any(target_family="wasm", miri))]
 pub fn timeout<TFn: 'static+Send+FnOnce() -> ()>(action: TFn, _millis: u64) {
     action();
 }
