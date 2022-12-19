@@ -424,6 +424,7 @@ impl Scheduler {
     fn sync_background<Result: Send, TFn: Send+FnOnce() -> Result>(&self, queue: &Arc<JobQueue>, job: TFn) -> Result {
         // Queue a job that unparks this thread when done
         let wakeup  = Arc::new(Condvar::new());
+        let ready   = Arc::new(Mutex::new(false));
         let result  = Arc::new(Mutex::new(None));
         let result2 = result.clone();
 
@@ -444,7 +445,7 @@ impl Scheduler {
         // Unsafe job with unbounded lifetime is needed because stuff on the queue normally needs a static lifetime
         let need_reschedule = {
             // Schedule the job and see if the queue went back to 'idle'. Reschedule if it is.
-            let unsafe_job  = Box::new(unsafe { UnsafeJob::new_with_notification(&mut *job, Arc::clone(&wakeup)) });
+            let unsafe_job  = Box::new(unsafe { UnsafeJob::new_with_notification(&mut *job, Arc::clone(&wakeup), Arc::clone(&ready)) });
             let mut core    = queue.core.lock().expect("JobQueue core lock");
 
             core.queue.push_back(unsafe_job);
@@ -454,23 +455,21 @@ impl Scheduler {
 
         // Wait for the result to arrive (and the sweet relief of no more unsafe job)
         let final_result = {
-            // TODO: small chance of undefined behaviour here: if the result is available before the condition variable is signalled, we never wait for the job
-            // to finish, which can result in us trying to dispose it while the function is still running on the other thread
-            let result_mutex    = result;
-            let mut result      = result_mutex.lock().expect("Background job result lock");
+            let ready_mutex = ready;
+            let mut ready   = ready_mutex.lock().expect("Background job ready lock");
             
-            while result.is_none() {
+            while !*ready {
                 // Use the condition variable to wait for the wakeup
-                result = wakeup.wait(result).expect("Background job cvar wait");
+                ready = wakeup.wait(ready).expect("Background job cvar wait");
 
                 // If we're woken up and the queue is idle, drain it until the result is available
-                if result.is_none() {
+                if !*ready {
                     // Need to drop the lock so we can safely run the queue
-                    mem::drop(result);
+                    mem::drop(ready);
 
                     if self.core.claim_pending_queue(queue) {
                         // We're now running the queue: try to run jobs on it until it's ready
-                        while result_mutex.lock().unwrap().is_none() {
+                        while !*ready_mutex.lock().unwrap() {
                             match JobQueue::run_one_job_now(queue) {
                                 JobStatus::Finished | JobStatus::NoJobsWaiting => { },
                             }
@@ -482,12 +481,12 @@ impl Scheduler {
                     }
 
                     // Re-acquire the lock
-                    result      = result_mutex.lock().expect("Background job result lock");
+                    ready = ready_mutex.lock().expect("Background job result lock");
                 }
             }
 
             // Get the final result by swapping it out of the mutex
-            let final_result        = result.take();
+            let final_result = result.lock().unwrap().take();
             final_result.expect("Finished background sync job without result")
         };
 
