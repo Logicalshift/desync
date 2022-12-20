@@ -82,6 +82,9 @@ fn pipe_through() {
         sender.send(42).await.unwrap();
         assert!(pipe_out.next().await == Some(43));
 
+        // It is possible for a poll to already be pending again at this point, which may race to read the value we set later on, so we synchronise to ensure they are all processed
+        obj.sync(|_| { });
+
         // Changing the value should change the output
         obj.desync(|core| *core = 2);
 
