@@ -8,6 +8,7 @@ use ::desync::*;
 use std::thread;
 
 #[test]
+#[cfg(not(miri))]   // slow!
 fn pipe_blockage() {
     // See https://github.com/Logicalshift/desync/issues/4 - this test fails by blocking and timing out
 
