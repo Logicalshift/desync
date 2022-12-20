@@ -382,11 +382,21 @@ fn poll_two_futures_on_one_queue() {
     }
     assert!((*wake2.awake.lock().unwrap()) == true);
 
-    let waker_ref           = task::waker_ref(&wake2);
-    let mut ctxt            = task::Context::from_waker(&waker_ref);
+    let mut count   = 0;
+    let poll_result = loop {
+        let waker_ref       = task::waker_ref(&wake2);
+        let mut ctxt        = task::Context::from_waker(&waker_ref);
+
+        let poll_result     = future_2.poll_unpin(&mut ctxt);
+
+        if count > 10                           { break poll_result; }
+        if let Poll::Ready(_) = &poll_result    { break poll_result; }
+
+        thread::sleep(Duration::from_millis(1));
+    };
 
     // Should be able to retrieve the result of future_2
-    assert!(future_2.poll_unpin(&mut ctxt) == Poll::Ready(Ok(())));
+    assert!(poll_result == Poll::Ready(Ok(())));
 
     // TODO: not actually sure if this is bad behaviour or not but if future_2 is polled first, future_1 won't be available until future_2
     //      completes. This is another 0 thread only issue as future_1 will be able to send its notification when the thread pool is available.
