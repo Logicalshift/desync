@@ -393,6 +393,7 @@ fn poll_two_futures_on_one_queue() {
         if let Poll::Ready(_) = &poll_result    { break poll_result; }
 
         thread::sleep(Duration::from_millis(1));
+        count += 1;
     };
 
     // Should be able to retrieve the result of future_2
