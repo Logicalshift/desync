@@ -85,8 +85,8 @@ fn pipe_through() {
         // Changing the value should change the output
         obj.desync(|core| *core = 2);
 
-        sender.send(42).await.unwrap();
-        assert!(pipe_out.next().await == Some(44));
+        sender.send(44).await.unwrap();
+        assert!(pipe_out.next().await == Some(46));
     });
 }
 

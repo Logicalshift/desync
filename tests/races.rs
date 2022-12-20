@@ -74,10 +74,10 @@ fn pipe_through() {
             // Changing the value should change the output
             obj.desync(|core| *core = 2);
 
-            sender.send(42).await.unwrap();
+            sender.send(44).await.unwrap();
             let val = pipe_out.next().await;
             println!("{:?}", val);
-            assert!(val == Some(44));
+            assert!(val == Some(46));
         });
     }
 }
