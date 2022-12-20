@@ -48,3 +48,36 @@ fn pipe_blockage() {
         }
     });
 }
+
+#[test]
+#[cfg(not(miri))]   // slow!
+fn pipe_through() {
+    // Race: the 'desync' to update the value to 2 should schedule ahead of the 'send(42)'
+    for _ in 0..1000 {
+        // Create a channel we'll use to send data to the pipe
+        let (mut sender, receiver) = mpsc::channel(10);
+
+        // Create an object to pipe through
+        let obj             = Arc::new(Desync::new(1));
+
+        // Create a pipe that adds values from the stream to the value in the object
+        let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item| future::ready(item + *core).boxed());
+
+        // Start things running
+        executor::block_on(async {
+            sender.send(2).await.unwrap();
+            assert!(pipe_out.next().await == Some(3));
+
+            sender.send(42).await.unwrap();
+            assert!(pipe_out.next().await == Some(43));
+
+            // Changing the value should change the output
+            obj.desync(|core| *core = 2);
+
+            sender.send(42).await.unwrap();
+            let val = pipe_out.next().await;
+            println!("{:?}", val);
+            assert!(val == Some(44));
+        });
+    }
+}
