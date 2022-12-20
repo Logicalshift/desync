@@ -64,6 +64,17 @@ lazy_static! {
 const PIPE_BACKPRESSURE_COUNT: usize = 5;
 
 ///
+/// Wakes up a pipe context
+///
+struct PipeWaker<Core, PollFn> 
+where
+    Core: Send + Unpin,
+{
+    /// If the context has not already been woken up, the context to wake
+    context: Mutex<Option<Arc<PipeContext<Core, PollFn>>>>
+}
+
+///
 /// Futures notifier used to wake up a pipe when a stream or future notifies
 ///
 struct PipeContext<Core, PollFn>
@@ -109,7 +120,9 @@ where
             target.future_desync(move |core| {
                 async move {
                     // Create a futures context from the context reference
-                    let waker   = task::waker_ref(&arc_self);
+                    let waker   = PipeWaker { context: Mutex::new(Some(Arc::clone(&arc_self))) };
+                    let waker   = Arc::new(waker);
+                    let waker   = task::waker_ref(&waker);
                     let context = Context::from_waker(&waker);
 
                     // Pass in to the poll function
@@ -139,17 +152,17 @@ where
     }
 }
 
-impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
+impl<Core, PollFn> task::ArcWake for PipeWaker<Core, PollFn>
 where
     Core:   'static + Send + Unpin,
     PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool>,
 {
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        Self::poll(Arc::clone(arc_self));
-    }
+        let context = arc_self.context.lock().unwrap().take();
 
-    fn wake(self: Arc<Self>) {
-        Self::poll(self);
+        if let Some(context) = context {
+            PipeContext::poll(context)
+        }
     }
 }
 
