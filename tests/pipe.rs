@@ -176,10 +176,20 @@ fn pipe_through_produces_backpressure() {
     executor::block_on(async {
         // Send 3 events to the pipe. Wait a bit between them to allow for processing time
         for _x in 0..3 {
-            assert!(sender.try_send(1) == Ok(()));
+            let mut iter = 0;
+            let succeeded = loop {
+                iter = iter + 1;
+                if iter > 1000 { break false; }
 
-            // The wait here allows the message to flow through to the pipe (if we call try_send again before the pipe has a chance to accept the input)
-            thread::sleep(Duration::from_millis(5));
+                if sender.try_send(1) == Ok(()) {
+                    break true;
+                }
+
+                // The wait here allows the message to flow through to the pipe (if we call try_send again before the pipe has a chance to accept the input)
+                thread::sleep(Duration::from_millis(5));
+            };
+
+            assert!(succeeded, "Could not queue next item");
         }
 
         // This will stick in the channel (pipe should not be accepting more input)
