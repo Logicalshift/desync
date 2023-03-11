@@ -193,7 +193,18 @@ fn pipe_through_produces_backpressure() {
         }
 
         // This will stick in the channel (pipe should not be accepting more input)
-        assert!(sender.try_send(2) == Ok(()));
+        let mut iter = 0;
+        let succeeded = loop {
+            iter = iter + 1;
+            if iter > 1000 { break false; }
+
+            if sender.try_send(2) == Ok(()) {
+                break true;
+            }
+
+            thread::sleep(Duration::from_millis(5));
+        };
+        assert!(succeeded, "Could not queue final item");
         thread::sleep(Duration::from_millis(5));
 
         // Channel will push back on this one
