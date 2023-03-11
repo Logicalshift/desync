@@ -82,7 +82,7 @@ where
 impl<Core, PollFn> PipeContext<Core, PollFn>
 where
     Core:   'static + Send + Unpin,
-    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool>
+    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, task::Waker) -> BoxFuture<'a, bool>
 {
     ///
     /// Creates a new pipe context, ready to poll
@@ -99,6 +99,11 @@ where
     ///
     /// Triggers the poll function in the context of the target desync
     ///
+    /// There are effectively two 'strands' of futures being managed here. Firstly we have the main stream: when this calls its waker,
+    /// it wakes up the Desync and the Desync starts to read values from it. Secondly, when a value is read, it's processed as a future.
+    /// Unlike the stream, this is run in order in the context of the desync. This gets a little confusing, so note that the 'PipeWaker'
+    /// wakes up the Desync.
+    ///
     fn poll(arc_self: Arc<Self>) {
         // If the desync is stil live...
         if let Some(target) = arc_self.target.upgrade() {
@@ -109,13 +114,14 @@ where
             let _ = target.future_desync(move |core| {
                 async move {
                     // Create a futures context from the context reference
-                    let waker   = task::waker_ref(&arc_self);
-                    let context = Context::from_waker(&waker);
+                    let waker = task::waker(Arc::clone(&arc_self));
 
                     // Pass in to the poll function
                     let future_poll = {
                         let mut maybe_poll_fn   = maybe_poll_fn.lock().unwrap();
-                        let future_poll         = maybe_poll_fn.as_mut().map(|poll_fn| (poll_fn)(core, context));
+                        let future_poll         = maybe_poll_fn.as_mut().map(move |poll_fn| {
+                            (poll_fn)(core, waker.clone())
+                        });
                         future_poll
                     };
 
@@ -138,7 +144,7 @@ where
 impl<Core, PollFn> task::ArcWake for PipeContext<Core, PollFn>
 where
     Core:   'static + Send + Unpin,
-    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, Context<'a>) -> BoxFuture<'a, bool>,
+    PollFn: 'static + Send + for<'a> FnMut(&'a mut Core, task::Waker) -> BoxFuture<'a, bool>,
 {
     fn wake_by_ref(arc_self: &Arc<Self>) {
         Self::poll(Arc::clone(arc_self));
@@ -172,16 +178,17 @@ where
     let process     = Arc::new(Mutex::new(process));
 
     // The context is used to trigger polling of the stream
-    let context     = PipeContext::new(&desync, move |core, context| {
+    let context     = PipeContext::new(&desync, move |core, desync_waker| {
         let process = Arc::clone(&process);
         let stream  = Arc::clone(&stream);
 
         async move {
-            let mut context = context;
-
             loop {
-                // Poll the stream
-                let next = stream.lock().unwrap().poll_next_unpin(&mut context);
+                // Poll the stream (waking up the desync if the stream notifies)
+                let next = {
+                    let mut desync_context = Context::from_waker(&desync_waker);
+                    stream.lock().unwrap().poll_next_unpin(&mut desync_context)
+                };
 
                 match next {
                     // Wait for notification when the stream goes pending
@@ -273,9 +280,8 @@ where
     let stream_core     = Arc::downgrade(&stream_core);
 
     // Create the read context
-    let context             = PipeContext::new(&desync, move |core, context| {
+    let context             = PipeContext::new(&desync, move |core, desync_waker| {
         let stream_core     = stream_core.upgrade();
-        let mut context     = context;
         let input_stream    = Arc::clone(&input_stream);
         let process         = Arc::clone(&process);
 
@@ -289,7 +295,7 @@ where
                     // If the pending queue is full, then stop processing events
                     if stream_core.pending.len() >= stream_core.max_pipe_depth {
                         // Wake when the stream accepts some input
-                        stream_core.backpressure_release_notify = Some(context.waker().clone());
+                        stream_core.backpressure_release_notify = Some(desync_waker.clone());
 
                         // Go back to sleep without reading from the stream
                         return true;
@@ -312,12 +318,15 @@ where
                     stream_core.lock().unwrap().notify_stream_closed = None;
 
                     // Poll the stream
-                    let next = input_stream.lock().unwrap().poll_next_unpin(&mut context);
+                    let next = {
+                        let mut desync_context = Context::from_waker(&desync_waker);
+                        input_stream.lock().unwrap().poll_next_unpin(&mut desync_context)
+                    };
 
                     match next {
                         // Wait for notification when the stream goes pending
                         Poll::Pending       => {
-                            stream_core.lock().unwrap().notify_stream_closed = Some(context.waker().clone());
+                            stream_core.lock().unwrap().notify_stream_closed = Some(desync_waker.clone());
                             return true
                         },
 
