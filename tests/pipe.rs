@@ -94,6 +94,38 @@ fn pipe_through() {
 }
 
 #[test]
+fn pipe_through_1000() {
+    for _ in 0..1000 {
+        // Create a channel we'll use to send data to the pipe
+        let (mut sender, receiver) = mpsc::channel(10);
+
+        // Create an object to pipe through
+        let obj             = Arc::new(Desync::new(1));
+
+        // Create a pipe that adds values from the stream to the value in the object
+        let mut pipe_out    = pipe(Arc::clone(&obj), receiver, |core, item| future::ready(item + *core).boxed());
+
+        // Start things running
+        executor::block_on(async {
+            sender.send(2).await.unwrap();
+            assert!(pipe_out.next().await == Some(3));
+
+            sender.send(42).await.unwrap();
+            assert!(pipe_out.next().await == Some(43));
+
+            // It is possible for a poll to already be pending again at this point, which may race to read the value we set later on, so we synchronise to ensure they are all processed
+            obj.sync(|_| { });
+
+            // Changing the value should change the output
+            obj.desync(|core| *core = 2);
+
+            sender.send(44).await.unwrap();
+            assert!(pipe_out.next().await == Some(46));
+        });
+    }
+}
+
+#[test]
 fn pipe_through_stream_closes() {
     let mut pipe_out_with_closed_stream = {
         // Create a channel we'll use to send data to the pipe
