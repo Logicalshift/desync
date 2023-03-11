@@ -77,10 +77,12 @@ fn pipe_through() {
     // Start things running
     executor::block_on(async {
         sender.send(2).await.unwrap();
-        assert!(pipe_out.next().await == Some(3));
+        let next_val = pipe_out.next().await;
+        assert!(next_val == Some(3), "{:?} != Some(3)", next_val);
 
         sender.send(42).await.unwrap();
-        assert!(pipe_out.next().await == Some(43));
+        let next_val = pipe_out.next().await;
+        assert!(next_val == Some(43), "{:?} != Some(43)", next_val);
 
         // It is possible for a poll to already be pending again at this point, which may race to read the value we set later on, so we synchronise to ensure they are all processed
         obj.sync(|_| { });
@@ -89,7 +91,8 @@ fn pipe_through() {
         obj.desync(|core| *core = 2);
 
         sender.send(44).await.unwrap();
-        assert!(pipe_out.next().await == Some(46));
+        let next_val = pipe_out.next().await;
+        assert!(next_val == Some(46), "{:?} != Some(46)", next_val);
     });
 }
 
@@ -108,10 +111,12 @@ fn pipe_through_1000() {
         // Start things running
         executor::block_on(async {
             sender.send(2).await.unwrap();
-            assert!(pipe_out.next().await == Some(3));
+            let next_val = pipe_out.next().await;
+            assert!(next_val == Some(3), "{:?} != Some(3)", next_val);
 
             sender.send(42).await.unwrap();
-            assert!(pipe_out.next().await == Some(43));
+            let next_val = pipe_out.next().await;
+            assert!(next_val == Some(43), "{:?} != Some(43)", next_val);
 
             // It is possible for a poll to already be pending again at this point, which may race to read the value we set later on, so we synchronise to ensure they are all processed
             obj.sync(|_| { });
@@ -120,7 +125,8 @@ fn pipe_through_1000() {
             obj.desync(|core| *core = 2);
 
             sender.send(44).await.unwrap();
-            assert!(pipe_out.next().await == Some(46));
+            let next_val = pipe_out.next().await;
+            assert!(next_val == Some(46), "{:?} != Some(46)", next_val);
         });
     }
 }
